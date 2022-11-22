@@ -291,6 +291,47 @@ end module my_module
 
 
 @pytest.mark.parametrize('frontend', available_frontends())
+def test_pickle_module_with_typebound_procedures(frontend):
+    """
+    Ensure that :any:`Module` object with cross-calling subroutines
+    pickle cleanly, including the procedure type symbols.
+    """
+
+    fcode = """
+module my_module
+  use some_mod, only: some_type
+  implicit none
+
+  type my_type
+    type(some_type) :: some_thing
+  contains
+    procedure :: do_stuff => do_stuff_my_type
+  end type
+
+  contains
+
+  subroutine do_stuff_my_type(self)
+    class(my_type), intent(in) :: self
+    real(8) :: n
+
+    call self%some_thing%do_stuff()
+  end subroutine do_stuff_my_type
+end module my_module
+"""
+    module = Module.from_source(fcode, frontend=frontend)
+
+    routine = module.routines[0]
+
+    module_new = loads(dumps(module))
+
+    routine_new = module_new.routines[0]
+
+    symbol_attrs_new = loads(dumps(routine.symbol_attrs))
+
+    from IPython import embed; embed()
+
+
+@pytest.mark.parametrize('frontend', available_frontends())
 def test_pickle_scheduler_item(here, frontend):
     """
     Test that :any:`Item` objects are picklable, so that we may use
