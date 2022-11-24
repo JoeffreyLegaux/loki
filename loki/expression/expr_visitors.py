@@ -11,8 +11,8 @@ Visitor classes for traversing and transforming all expression trees in
 """
 from pymbolic.primitives import Expression
 
-from loki.ir import Node
-from loki.visitors import Visitor, Transformer
+from loki.ir import Node, CallStatement
+from loki.visitors import Visitor, Transformer, FindNodes
 from loki.tools import flatten, as_tuple
 from loki.expression.mappers import SubstituteExpressionsMapper, ExpressionRetriever, AttachScopesMapper
 from loki.expression.symbols import (
@@ -379,6 +379,10 @@ class AttachScopes(Visitor):
         # First, make sure declared variables and imported symbols have an
         # entry in the scope's table
         self._update_symbol_table_with_decls_and_imports(o)
+
+        # Also ensure that all procedure types are registered
+        for c in FindNodes(CallStatement).visit(o.body):
+            o.symbol_attrs.setdefault(c.name.name, c.name.type)
 
         # Then recurse to all children
         kwargs['scope'] = o
