@@ -219,13 +219,15 @@ class TypedSymbol:
 
         # Try a look-up via parent
         if self.parent:
-            tdef_var = self.parent.variable_map.get(self.basename)
+            # tdef_var = self.parent.variable_map.get(self.basename)
+            tdef_var = self.parent._get_child_symbol(self.basename)
             if not tdef_var and self.parent.scope is not scope:
                 # If the parent isn't delivering straight away (may happen e.g. for nested derived types)
                 # we'll try discovering its parent's type via the provided scope
                 parent = self._lookup_parent(scope)
                 if parent:
-                    tdef_var = parent.variable_map.get(self.basename)
+                    # tdef_var = parent.variable_map.get(self.basename)
+                    tdef_var = parent._get_child_symbol(self.basename)
             if tdef_var:
                 return tdef_var.type
 
@@ -244,7 +246,9 @@ class TypedSymbol:
             if not parent_var:
                 # If the look-up fails somewhere we have to bail out
                 return None
-            parent_var = parent_var.variable_map.get(name)  # pylint: disable=no-member
+            # parent_var = parent_var.variable_map.get(name)  # pylint: disable=no-member
+            # parent_var = parent_var.clone(scope=self.scope)
+            parent_var = parent_var._get_child_symbol(name)
         # ...until we are at the actual parent
         return parent_var
 
@@ -308,6 +312,22 @@ class TypedSymbol:
                 for v in _type.dtype.typedef.variables
             )
         return None
+
+    def _get_child_symbol(self, name):
+        """
+        equivalent of `.variable_map.get(name)`, but without creating
+        unused symbols as side effects.
+        """
+        _type = self.type
+        if _type and isinstance(_type.dtype, DerivedType):
+            if _type.dtype.typedef is BasicType.DEFERRED:
+                return None
+            variables = _type.dtype.typedef.variables
+            vmap = CaseInsensitiveDict((v.basename, v) for v in variables or ())
+            v = vmap.get(name)
+            return v.clone(name=f'{self.name}%{v.name}', scope=self.scope, parent=self)
+        else:
+            return None
 
     @property
     def variable_map(self):
@@ -604,6 +624,13 @@ class MetaSymbol(StrCompareMixin, pmbl.AlgebraicLeaf):
         """
         return self.symbol.variable_map
 
+    def _get_child_symbol(self, name):
+        """
+        equivalent of `.variable_map.get(name)`, but without creating
+        unused symbols as side effects.
+        """
+        return self.symbol._get_child_symbol(name)
+
     @property
     def initial(self):
         """
@@ -892,12 +919,17 @@ class Variable:
                 for pname in name_parts[1:-1]:
                     if not parent:
                         return None
-                    parent = parent.variable_map.get(pname)  # pylint: disable=no-member
+                    # parent = parent.variable_map.get(pname)  # pylint: disable=no-member
+                    # parent = parent.clone(name=f'{parent.name}%{pname}', scope=self.scope)
+                    parent = parent._get_child_symbol(pname)
             if parent:
                 # Lookup type in parent's typedef
-                tdef_var = parent.variable_map.get(name_parts[-1])
+                # tdef_var = parent.variable_map.get(name_parts[-1])
+                tdef_var = parent._get_child_symbol(name_parts[-1])
+
                 if tdef_var:
                     return tdef_var.type
+                    # return tdef_var.clone(name=f'{parent.name}%{name_parts[-1]}', scope=self.scope).type
 
         return stored_type
 
