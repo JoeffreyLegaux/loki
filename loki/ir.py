@@ -12,7 +12,7 @@ Control flow node classes for
 """
 
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import chain
 import inspect
 from typing import Tuple
@@ -71,6 +71,10 @@ class Node:
 
     source: Source = None
     label: str = None
+
+    _live_symbols: Tuple[Expression] = field(hash=False, compare=False, default=None)
+    _defines_symbols: Tuple[Expression] = field(hash=False, compare=False, default=None)
+    _uses_symbols: Tuple[Expression] = field(hash=False, compare=False, default=None)
 
     _argnames = ('label', 'source')
 
@@ -191,7 +195,7 @@ class Node:
         :py:func:`loki.analyse.analyse_dataflow.dataflow_analysis_attached`
         context manager.
         """
-        if not hasattr(self, '_live_symbols'):
+        if self._live_symbols is None:
             raise RuntimeError('Need to run dataflow analysis on the IR first.')
         return self._live_symbols
 
@@ -206,7 +210,7 @@ class Node:
         :py:func:`loki.analyse.analyse_dataflow.dataflow_analysis_attached`
         context manager.
         """
-        if not hasattr(self, '_defines_symbols'):
+        if self._defines_symbols is None:
             raise RuntimeError('Need to run dataflow analysis on the IR first.')
         return self._defines_symbols
 
@@ -222,7 +226,7 @@ class Node:
         :py:func:`loki.analyse.analyse_dataflow.dataflow_analysis_attached`
         context manager.
         """
-        if not hasattr(self, '_uses_symbols'):
+        if self._uses_symbols is None:
             raise RuntimeError('Need to run dataflow analysis on the IR first.')
         return self._uses_symbols
 
