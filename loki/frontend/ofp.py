@@ -1399,7 +1399,7 @@ class OFP2IR(GenericVisitor):
                     v.name: v.type.clone(imported=True, use_name=k) for k, v in rename_list.items()
                 })
             rename_list = tuple(rename_list.items()) if rename_list else None
-        return ir.Import(module=name, symbols=symbols, rename_list=rename_list,
+        return ir.Import(module=name, symbols=as_tuple(symbols), rename_list=rename_list,
                          label=kwargs['label'], source=kwargs['source'])
 
     def visit_only(self, o, **kwargs):

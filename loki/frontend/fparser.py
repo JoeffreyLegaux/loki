@@ -491,8 +491,10 @@ class FParser2IR(GenericVisitor):
         else:
             raise ValueError(f'Unexpected only/rename-list value in USE statement: {o.children[3]}')
 
-        return ir.Import(module=name, symbols=symbols, nature=nature, rename_list=rename_list,
-                         source=kwargs.get('source'), label=kwargs.get('label'))
+        return ir.Import(
+            module=name, symbols=as_tuple(symbols), nature=nature, rename_list=rename_list,
+            source=kwargs.get('source'), label=kwargs.get('label')
+        )
 
     visit_Only_List = visit_List
     visit_Rename_List = visit_List
@@ -1537,8 +1539,11 @@ class FParser2IR(GenericVisitor):
             spec = spec.rescope(scope=scope)
 
         # Traverse the body and build the object
-        body = as_tuple(self.visit(c, **kwargs) for c in o.children[interface_stmt_index+1:end_interface_stmt_index])
-        interface = ir.Interface(body=body, abstract=abstract, spec=spec, label=kwargs.get('label'), source=source)
+        body = tuple(self.visit(c, **kwargs) for c in o.children[interface_stmt_index+1:end_interface_stmt_index])
+        interface = ir.Interface(
+            body=as_tuple(flatten(body)), abstract=abstract,
+            spec=spec, label=kwargs.get('label'), source=source
+        )
 
         # Everything past the END INTERFACE (should be empty)
         assert not o.children[end_interface_stmt_index+1:]
