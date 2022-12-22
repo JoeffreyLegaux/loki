@@ -337,11 +337,10 @@ class OMNI2IR(GenericVisitor):
                 ast=o, source=self.get_source(o)
             )
         else:
-            routine.__init__(  # pylint: disable=unnecessary-dunder-call
+            routine.__initialize__(
                 name=name, args=args, docstring=routine.docstring, spec=routine.spec, body=routine.body,
                 contains=routine.contains, prefix=prefix, bind=None, is_function=is_function,
-                ast=o, source=self.get_source(o), parent=routine.parent, symbol_attrs=routine.symbol_attrs,
-                incomplete=routine._incomplete
+                ast=o, source=self.get_source(o), incomplete=routine._incomplete
             )
 
         return routine
