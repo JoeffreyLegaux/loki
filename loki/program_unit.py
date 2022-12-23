@@ -211,16 +211,6 @@ class ProgramUnit(Scope):
             The enclosing parent scope of the module.
         """
 
-    @abstractmethod
-    def register_in_parent_scope(self):
-        """
-        Insert the type information for this object in the parent's symbol table
-
-        If :attr:`parent` is `None`, this does nothing.
-
-        This method must be implemented by the derived class.
-        """
-
     def make_complete(self, **frontend_args):
         """
         Trigger a re-parse of the object if incomplete to produce a full Loki IR

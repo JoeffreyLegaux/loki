@@ -349,3 +349,12 @@ class Scope:
                 return scope
             scope = scope.parent
         return None
+
+    def register_in_parent_scope(self):
+        """
+        Insert the type information for this object in the parent's symbol table
+
+        If :attr:`parent` is `None`, this does nothing.
+        """
+        if self.parent:
+            self.parent.symbol_attrs[self.name] = SymbolAttributes(self.procedure_type)

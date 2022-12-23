@@ -238,15 +238,6 @@ class Subroutine(ProgramUnit):
         ir_ = parse_regex_source(raw_source, parser_classes=parser_classes, scope=parent)
         return [node for node in ir_.body if isinstance(node, cls)][0]
 
-    def register_in_parent_scope(self):
-        """
-        Insert the type information for this object in the parent's symbol table
-
-        If :attr:`parent` is `None`, this does nothing.
-        """
-        if self.parent:
-            self.parent.symbol_attrs[self.name] = SymbolAttributes(self.procedure_type)
-
     def clone(self, **kwargs):
         """
         Create a copy of the subroutine with the option to override individual
