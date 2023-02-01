@@ -28,7 +28,7 @@ __all__ = [
     'shift_to_zero_indexing', 'invert_array_indices',
     'resolve_vector_notation', 'normalize_range_indexing',
     'promote_variables', 'promote_nonmatching_variables',
-    'promotion_dimensions_from_loop_nest'
+    'promotion_dimensions_from_loop_nest', 'flatten_arrays'
 ]
 
 
@@ -428,3 +428,68 @@ def promote_nonmatching_variables(routine, promotion_vars_dims, promotion_vars_i
     for (index, size), var_names in index_size_var_map.items():
         promote_variables(routine, var_names, -1, index=index, size=size)
     info('%s: promoted variable(s): %s', routine.name, ', '.join(promotion_vars_dims.keys()))
+
+
+# def flatten_arrays(routine, reverse=False, start_index=1):
+#
+#     def new_dims(dim, shape, start_index=1):
+#         if len(dim) > 1:
+#             _dim = [sym.Sum((dim[-2], sym.Product((shape[-2], dim[-1] - start_index))))]
+#             new_dim = dim[:-2]
+#             new_dim.extend(_dim)
+#             return new_dims(new_dim, shape[:-1], start_index=start_index)
+#         else:
+#             return dim
+#
+#     array_map = {}
+#     for var in FindVariables().visit(routine.body):
+#         if isinstance(var, sym.Array) and len(var.shape) > 1:
+#             if reverse:
+#                 _dims = new_dims(list(reversed(var.dimensions)), list(reversed(var.shape)),
+#                                  start_index=start_index)
+#             else:
+#                 _dims = new_dims(list(var.dimensions), list(var.shape), start_index=start_index)
+#             array_map[var] = var.clone(dimensions=as_tuple(_dims))
+#
+#     routine.body = SubstituteExpressions(array_map).visit(routine.body)
+#
+#     decl_map = {}
+#     for decl in FindNodes(VariableDeclaration).visit(routine.spec):
+#         symbols = []
+#         for smbl in decl.symbols:
+#             if isinstance(smbl, sym.Array) and len(smbl.shape) > 1:
+#                 symbols.append(smbl.clone(dimensions=(sym.Product(smbl.shape),)))
+#             else:
+#                 symbols.append(smbl)
+#         decl_map[decl] = decl.clone(symbols=as_tuple(symbols))
+#     routine.spec = Transformer(decl_map).visit(routine.spec)
+
+def flatten_arrays(routine, order='F', start_index=1):
+
+    def new_dims(dim, shape):
+        if len(dim) > 1:
+            _dim = [sym.Sum((dim[-2], sym.Product((shape[-2], dim[-1] - start_index))))]
+            new_dim = dim[:-2]
+            new_dim.extend(_dim)
+            return new_dims(new_dim, shape[:-1])
+        else:
+            return as_tuple(dim)
+
+    order = order if order in ['F', 'C'] else 'F'
+    if order == 'C':
+        array_map = {
+            var: var.clone(dimensions=new_dims(list(var.dimensions)[::-1], list(var.shape)[::-1]))
+            for var in FindVariables().visit(routine.body) if isinstance(var, sym.Array) and len(var.shape)
+        }
+    elif order == 'F':
+        array_map = {
+            var: var.clone(dimensions=new_dims(list(var.dimensions), list(var.shape)))
+            for var in FindVariables().visit(routine.body) if isinstance(var, sym.Array) and len(var.shape)
+        }
+    routine.body = SubstituteExpressions(array_map).visit(routine.body)
+
+    routine.variables = [v.clone(dimensions=as_tuple(sym.Product(v.shape)),
+                                 type=v.type.clone(shape=as_tuple(sym.Product(v.shape))))
+                         if isinstance(v, sym.Array) else v for v in routine.variables]
+
+

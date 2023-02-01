@@ -12,8 +12,8 @@ import numpy as np
 from conftest import jit_compile, clean_test, available_frontends
 from loki import Subroutine
 from loki.expression import symbols as sym
-from loki.transform import promote_variables, normalize_range_indexing
-
+from loki.transform import promote_variables, normalize_range_indexing, flatten_arrays
+from loki import fgen
 
 @pytest.fixture(scope='module', name='here')
 def fixture_here():
@@ -151,3 +151,49 @@ end subroutine transform_promote_variables
 
     clean_test(filepath)
     clean_test(promoted_filepath)
+
+
+@pytest.mark.parametrize('frontend', available_frontends())
+def test_transform_flatten_arrays(here, frontend):
+    """
+    ...
+    """
+
+    fcode = """
+    subroutine kernel(x1, x2, x3, x4)
+        integer :: i1, i2, i3, i4, i5
+        integer, parameter :: l1 = 10
+        integer, parameter :: l2 = 20
+        integer, parameter :: l3 = 30
+        integer, parameter :: l4 = 40
+        real :: x1(l1), x2(l2, l1), x3(l3, l2, l1), x4(l4, l3, l2, l1)
+        
+        do i1=1,l1
+            x1(i1) = 1.0
+            do i2=1,l2
+                x2(i2, i1) = 2.0
+                do i3=1,l3
+                    x3(i3, i2, i1) = 3.0
+                    do i4=1,l4
+                        x4(i4, i3, i2, i1) = 4.0
+                    end do
+                end do
+            end do
+        end do
+        
+        
+    end subroutine kernel
+    """
+
+    print("")
+    print("Fortran style ...")
+    routine = Subroutine.from_source(fcode, frontend=frontend)
+    flatten_arrays(routine=routine, order='F', start_index=1)
+    print(fgen(routine))
+
+    print("")
+    print("C style ...")
+    routine = Subroutine.from_source(fcode, frontend=frontend)
+    flatten_arrays(routine=routine, order='C', start_index=0)
+    print(fgen(routine))
+
