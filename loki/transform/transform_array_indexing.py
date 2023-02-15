@@ -19,7 +19,7 @@ from loki.expression import (
     symbols as sym, simplify, symbolic_op, FindVariables, SubstituteExpressions
 )
 from loki.ir import Assignment, Loop, VariableDeclaration
-from loki.tools import as_tuple
+from loki.tools import as_tuple, CaseInsensitiveDict
 from loki.types import SymbolAttributes, BasicType
 from loki.visitors import FindNodes, Transformer
 
@@ -28,27 +28,73 @@ __all__ = [
     'shift_to_zero_indexing', 'invert_array_indices',
     'resolve_vector_notation', 'normalize_range_indexing',
     'promote_variables', 'promote_nonmatching_variables',
-    'promotion_dimensions_from_loop_nest', 'flatten_arrays'
+    'promotion_dimensions_from_loop_nest', 'demote_variables',
+    'flatten_arrays'
 ]
 
 
-def shift_to_zero_indexing(routine):
+# def shift_to_zero_indexing(routine):
+#     """
+#     Shift all array indices to adjust to 0-based indexing conventions (eg. for C or Python)
+#     """
+#     vmap = {}
+#     for v in FindVariables(unique=False).visit(routine.body):
+#         if isinstance(v, sym.Array):
+#             new_dims = []
+#             for d in v.dimensions:
+#                 if isinstance(d, sym.RangeIndex):
+#                     start = d.start - sym.Literal(1) if d.start is not None else None
+#                     # no shift for stop because Python ranges are [start, stop)
+#                     new_dims += [sym.RangeIndex((start, d.stop, d.step))]
+#                 else:
+#                     new_dims += [d - sym.Literal(1)]
+#             vmap[v] = v.clone(dimensions=as_tuple(new_dims))
+#     routine.body = SubstituteExpressions(vmap).visit(routine.body)
+
+
+def shift_to_zero_indexing(routine, by_loop_range=False, implicit_loop_vars=None):
     """
     Shift all array indices to adjust to 0-based indexing conventions (eg. for C or Python)
     """
-    vmap = {}
-    for v in FindVariables(unique=False).visit(routine.body):
-        if isinstance(v, sym.Array):
-            new_dims = []
-            for d in v.dimensions:
-                if isinstance(d, sym.RangeIndex):
-                    start = d.start - sym.Literal(1) if d.start is not None else None
-                    # no shift for stop because Python ranges are [start, stop)
-                    new_dims += [sym.RangeIndex((start, d.stop, d.step))]
+    if implicit_loop_vars is None:
+        implicit_loop_vars = ()
+    else:
+        assert isinstance(implicit_loop_vars, tuple) or isinstance(implicit_loop_vars, list)
+
+    if not by_loop_range:
+        vmap = {}
+        for v in FindVariables(unique=False).visit(routine.body):
+            if isinstance(v, sym.Array):
+                new_dims = []
+                for d in v.dimensions:
+                    if isinstance(d, sym.RangeIndex):
+                        start = d.start - sym.Literal(1) if d.start is not None else None
+                        # no shift for stop because Python ranges are [start, stop)
+                        new_dims += [sym.RangeIndex((start, d.stop, d.step))]
+                    else:
+                        new_dims += [d - sym.Literal(1)]
+                vmap[v] = v.clone(dimensions=as_tuple(new_dims))
+        routine.body = SubstituteExpressions(vmap).visit(routine.body)
+    else:
+        for loop in reversed(FindNodes(Loop).visit(routine.body)):
+            variables = FindVariables().visit(loop.body)
+            _vmap = {var: (var + 1) for var in variables if var.name == loop.variable}
+            loop.body = SubstituteExpressions(_vmap).visit(loop.body)
+            loop.bounds = sym.LoopRange((simplify(loop.bounds.lower - 1),
+                                         simplify(loop.bounds.upper - 1),
+                                         loop.bounds.step))
+
+        arrays = [var for var in FindVariables().visit(routine.body) if isinstance(var, sym.Array)]
+        array_map = {}
+        for array in arrays:
+            dims = []
+            for dim in array.dimensions:
+                if not any(_ in FindVariables().visit(dim) for _ in implicit_loop_vars):
+                    dims.append(simplify(dim - 1))
                 else:
-                    new_dims += [d - sym.Literal(1)]
-            vmap[v] = v.clone(dimensions=as_tuple(new_dims))
-    routine.body = SubstituteExpressions(vmap).visit(routine.body)
+                    dims.append(simplify(dim))
+            array_map[array] = array.clone(dimensions=as_tuple(dims))
+        routine.body = SubstituteExpressions(array_map).visit(routine.body)
 
 
 def invert_array_indices(routine):
@@ -430,40 +476,6 @@ def promote_nonmatching_variables(routine, promotion_vars_dims, promotion_vars_i
     info('%s: promoted variable(s): %s', routine.name, ', '.join(promotion_vars_dims.keys()))
 
 
-# def flatten_arrays(routine, reverse=False, start_index=1):
-#
-#     def new_dims(dim, shape, start_index=1):
-#         if len(dim) > 1:
-#             _dim = [sym.Sum((dim[-2], sym.Product((shape[-2], dim[-1] - start_index))))]
-#             new_dim = dim[:-2]
-#             new_dim.extend(_dim)
-#             return new_dims(new_dim, shape[:-1], start_index=start_index)
-#         else:
-#             return dim
-#
-#     array_map = {}
-#     for var in FindVariables().visit(routine.body):
-#         if isinstance(var, sym.Array) and len(var.shape) > 1:
-#             if reverse:
-#                 _dims = new_dims(list(reversed(var.dimensions)), list(reversed(var.shape)),
-#                                  start_index=start_index)
-#             else:
-#                 _dims = new_dims(list(var.dimensions), list(var.shape), start_index=start_index)
-#             array_map[var] = var.clone(dimensions=as_tuple(_dims))
-#
-#     routine.body = SubstituteExpressions(array_map).visit(routine.body)
-#
-#     decl_map = {}
-#     for decl in FindNodes(VariableDeclaration).visit(routine.spec):
-#         symbols = []
-#         for smbl in decl.symbols:
-#             if isinstance(smbl, sym.Array) and len(smbl.shape) > 1:
-#                 symbols.append(smbl.clone(dimensions=(sym.Product(smbl.shape),)))
-#             else:
-#                 symbols.append(smbl)
-#         decl_map[decl] = decl.clone(symbols=as_tuple(symbols))
-#     routine.spec = Transformer(decl_map).visit(routine.spec)
-
 def flatten_arrays(routine, order='F', start_index=1):
 
     def new_dims(dim, shape):
@@ -479,12 +491,12 @@ def flatten_arrays(routine, order='F', start_index=1):
     if order == 'C':
         array_map = {
             var: var.clone(dimensions=new_dims(list(var.dimensions)[::-1], list(var.shape)[::-1]))
-            for var in FindVariables().visit(routine.body) if isinstance(var, sym.Array) and len(var.shape)
+            for var in FindVariables().visit(routine.body) if isinstance(var, sym.Array) and var.shape and len(var.shape)
         }
     elif order == 'F':
         array_map = {
             var: var.clone(dimensions=new_dims(list(var.dimensions), list(var.shape)))
-            for var in FindVariables().visit(routine.body) if isinstance(var, sym.Array) and len(var.shape)
+            for var in FindVariables().visit(routine.body) if isinstance(var, sym.Array) and var.shape and len(var.shape)
         }
     routine.body = SubstituteExpressions(array_map).visit(routine.body)
 
@@ -493,3 +505,69 @@ def flatten_arrays(routine, order='F', start_index=1):
                          if isinstance(v, sym.Array) else v for v in routine.variables]
 
 
+def demote_variables(routine, variable_names, dimensions):
+    """
+    Demote a list of array variables by removing any occurence of a
+    provided set of dimension symbols.
+
+    Parameters
+    ----------
+    routine : :any:`Subroutine`
+        The subroutine in which the variables should be promoted.
+    variable_names : list of str
+        The names of variables to be promoted. Matching of variables against
+        names is case-insensitive.
+    dimensions : :py:class:`pymbolic.Expression` or tuple
+        Symbol name or tuple of symbol names representing the dimension
+        to remove from all occurances of the named variables.
+    """
+    dimensions = as_tuple(dimensions)
+
+    # Compare lower-case only, since we're not comparing symbols
+    vnames = tuple(name.lower() for name in variable_names)
+
+    variables = FindVariables(unique=False).visit(routine.ir)
+    variables = tuple(v for v in variables if v.name.lower() in vnames)
+    variables = tuple(v for v in variables if hasattr(v, 'shape'))
+
+    if not variables:
+        return
+
+    # Record original array shapes
+    shape_map = CaseInsensitiveDict({v.name: v.shape for v in variables})
+
+    # Remove shape and dimension entries from each variable in the list
+    vmap = {}
+    for v in variables:
+        old_shape = shape_map[v.name]
+        new_shape = tuple(s for s in old_shape if s not in dimensions)
+        new_dims = tuple(d for d, s in zip(v.dimensions, old_shape) if s in new_shape)
+
+        new_type = v.type.clone(shape=new_shape or None)
+        vmap[v] = v.clone(dimensions=new_dims or None, type=new_type)
+
+    # Propagate the new dimensions to declarations and routine bodys
+    routine.body = SubstituteExpressions(vmap).visit(routine.body)
+    routine.spec = SubstituteExpressions(vmap).visit(routine.spec)
+
+    # Ensure all declarations with `DIMENSION` keywords are modified too!
+    decls = tuple(
+        d for d in FindNodes(VariableDeclaration).visit(routine.spec)
+        if d.dimensions and any(s.name.lower() in vnames for s in d.symbols)
+    )
+    decl_map = {}
+    for decl in decls:
+        # If all symbols have the same shape (after demotion)
+        sym_shape = tuple(s.shape if isinstance(s, sym.Array) else None for s in decl.symbols)
+        if all(d == sym_shape[0] for d in sym_shape):
+            dimensions = decl.symbols[0].shape if isinstance(decl.symbols[0], sym.Array) else None
+            decl_map[decl] = decl.clone(dimensions=dimensions)
+        else:
+            # If not, split into multiple declarations
+            sdims = tuple(s.shape if isinstance(s, sym.Array) else None for s in decl.symbols)
+            decl_map[decl] = tuple(
+                decl.clone(symbols=(s,), dimensions=d) for s, d in zip(decl.symbols, sdims)
+            )
+    routine.spec = Transformer(decl_map).visit(routine.spec)
+
+    info(f'[Loki] {routine.name}:: demoted variable(s): {", ".join(variable_names)}')

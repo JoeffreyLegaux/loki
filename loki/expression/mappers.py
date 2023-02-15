@@ -92,6 +92,7 @@ class LokiStringifyMapper(StringifyMapper):
         return expr.name
 
     map_deferred_type_symbol = map_variable_symbol
+    map_procedure_symbol = map_variable_symbol
 
     def map_meta_symbol(self, expr, enclosing_prec, *args, **kwargs):
         return self.rec(expr._symbol, enclosing_prec, *args, **kwargs)
@@ -208,8 +209,7 @@ class LokiStringifyMapper(StringifyMapper):
         index_str = self.join_rec(', ', expr.index_tuple, PREC_NONE, *args, **kwargs)
         return f'{name_str}({index_str})'
 
-    def map_procedure_symbol(self, expr, enclosing_prec, *args, **kwargs):
-        return expr.name
+    map_string_subscript = map_array_subscript
 
 
 class LokiWalkMapper(WalkMapper):
@@ -254,6 +254,8 @@ class LokiWalkMapper(WalkMapper):
         self.rec(expr.aggregate, *args, **kwargs)
         self.rec(expr.index, *args, **kwargs)
         self.post_visit(expr, *args, **kwargs)
+
+    map_string_subscript = map_array_subscript
 
     map_logic_literal = WalkMapper.map_constant
     map_string_literal = WalkMapper.map_constant
@@ -389,6 +391,8 @@ class ExpressionDimensionsMapper(Mapper):
     def map_array_subscript(self, expr, *args, **kwargs):
         return flatten(tuple(self.rec(d, *args, **kwargs) for d in expr.index_tuple))
 
+    map_string_subscript = map_algebraic_leaf
+
     def map_range_index(self, expr, *args, **kwargs):  # pylint: disable=unused-argument
         if expr.lower is None and expr.upper is None:
             # We have the full range
@@ -456,6 +460,8 @@ class ExpressionCallbackMapper(CombineMapper):
         rec_results += (self.rec(expr.index, *args, **kwargs), )
         return self.combine(rec_results)
 
+    map_string_subscript = map_array_subscript
+
     map_inline_call = CombineMapper.map_call_with_kwargs
 
     def map_cast(self, expr, *args, **kwargs):
@@ -515,12 +521,18 @@ class LokiIdentityMapper(IdentityMapper):
         if expr is None:
             return None
         new_expr = super().__call__(expr, *args, **kwargs)
-        if new_expr is not expr and hasattr(expr, '_source'):
-            if expr._source:
+        if getattr(expr, 'source', None):
+            if isinstance(new_expr, tuple):
+                for e in new_expr:
+                    if self.invalidate_source:
+                        e.source = None
+                    else:
+                        e.source = deepcopy(expr.source)
+            else:
                 if self.invalidate_source:
-                    new_expr._source = None
+                    new_expr.source = None
                 else:
-                    new_expr._source = deepcopy(expr._source)
+                    new_expr.source = deepcopy(expr.source)
         return new_expr
 
     rec = __call__
@@ -587,10 +599,19 @@ class LokiIdentityMapper(IdentityMapper):
     map_scalar = map_meta_symbol
 
     def map_array(self, expr, *args, **kwargs):
+        from loki.expression.symbols import ProcedureSymbol, InlineCall  # pylint: disable=import-outside-toplevel
         symbol = self.rec(expr.symbol, *args, **kwargs)
-        dimensions = self.rec(expr.dimensions, *args, **kwargs)
-        shape = self.rec(symbol.type.shape, *args, **kwargs)
         parent = self.rec(expr.parent, *args, **kwargs) if expr.parent else None
+        dimensions = self.rec(expr.dimensions, *args, **kwargs)
+        if isinstance(symbol, ProcedureSymbol):
+            # Workaround for frontend deficiencies: Fparser may wrongfully
+            # classify an inline call as an array, which may later on be
+            # corrected thanks to type information in the symbol table.
+            # When this happens, we need to convert this to an inline call here
+            # and make sure we don't loose the call parameters (aka dimensions)
+            return InlineCall(function=symbol.clone(parent=parent), parameters=dimensions)
+
+        shape = self.rec(symbol.type.shape, *args, **kwargs)
         if (getattr(symbol, 'symbol', symbol) is expr.symbol and
                 all(d is orig_d for d, orig_d in zip_longest(dimensions or (), expr.dimensions or ())) and
                 all(d is orig_d for d, orig_d in zip_longest(shape or (), symbol.type.shape or ()))):
@@ -599,6 +620,11 @@ class LokiIdentityMapper(IdentityMapper):
 
     def map_array_subscript(self, expr, *args, **kwargs):
         raise RuntimeError('Recursion should have ended at map_array')
+
+    def map_string_subscript(self, expr, *args, **kwargs):
+        symbol = self.rec(expr.symbol, *args, **kwargs)
+        index_tuple = self.rec(expr.index_tuple, *args, **kwargs)
+        return expr.__class__(symbol, index_tuple)
 
     map_inline_call = IdentityMapper.map_call_with_kwargs
 
@@ -665,11 +691,12 @@ class SubstituteExpressionsMapper(LokiIdentityMapper):
             setattr(self, expr.mapper_method, self.map_from_expr_map)
 
     def map_from_expr_map(self, expr, *args, **kwargs):
-        # We have to recurse here to make sure we are applying the substitution also to
-        # "hidden" places (such as dimension expressions inside an array).
-        # And we have to actually carry out the expression first before looking up the
-        # super()-method as the node type might change.
-        expr = self.expr_map.get(expr, expr)
+        """
+        Replace an expr with its substitution, if found in the :attr:`expr_map`,
+        otherwise continue tree traversal
+        """
+        if expr in self.expr_map:
+            return self.expr_map[expr]
         map_fn = getattr(super(), expr.mapper_method)
         return map_fn(expr, *args, **kwargs)
 

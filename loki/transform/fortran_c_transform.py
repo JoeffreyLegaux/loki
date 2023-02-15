@@ -11,7 +11,7 @@ from collections import OrderedDict
 from loki.transform.transformation import Transformation
 from loki.transform.transform_array_indexing import (
     shift_to_zero_indexing, invert_array_indices,
-    resolve_vector_notation, normalize_range_indexing
+    resolve_vector_notation, normalize_range_indexing, flatten_arrays
 )
 from loki.transform.transform_associates import resolve_associates
 from loki.transform.transform_utilities import (
@@ -33,7 +33,7 @@ from loki.expression import (
     ProcedureSymbol
 )
 from loki.visitors import Transformer, FindNodes
-from loki.tools import as_tuple
+from loki.tools import as_tuple, flatten
 from loki.types import BasicType, DerivedType, SymbolAttributes
 
 
@@ -361,7 +361,10 @@ class FortranCTransformation(Transformation):
         # Convert array indexing to C conventions
         # TODO: Resolve reductions (eg. SUM(myvar(:)))
         invert_array_indices(kernel)
-        shift_to_zero_indexing(kernel)
+        # shift_to_zero_indexing(kernel, by_loop_range=False)
+        shift_to_zero_indexing(kernel, by_loop_range=True, implicit_loop_vars=('jl', 'ibl'))
+
+        flatten_arrays(kernel, order="C", start_index=0)
 
         # Inline all known parameters, since they can be used in declarations,
         # and thus need to be known before we can fetch them via getters.
@@ -371,23 +374,28 @@ class FortranCTransformation(Transformation):
             # Inline known elemental function via expression substitution
             inline_elemental_functions(kernel)
 
+        # Create declarations for module variables
+        module_variables = {
+            im.module.lower(): [
+                s.clone(scope=kernel, type=s.type.clone(imported=None, module=None)) for s in im.symbols
+                if isinstance(s, Scalar) and s.type.dtype is not BasicType.DEFERRED and not s.type.parameter
+            ]
+            for im in kernel.imports
+        }
+        kernel.variables += as_tuple(flatten(list(module_variables.values())))
+
         # Create calls to getter routines for module variables
         getter_calls = []
-        for im in FindNodes(Import).visit(kernel.spec):
-            for s in im.symbols:
-                if isinstance(s, Scalar) and s.type.dtype is not BasicType.DEFERRED:
-                    # Skip parameters, as they will be inlined
-                    if s.type.parameter:
-                        continue
-                    decl = VariableDeclaration(symbols=(s,))
-                    getter = f'{im.module.lower()}__get__{s.name.lower()}'
-                    vget = Assignment(lhs=s, rhs=InlineCall(ProcedureSymbol(getter, scope=s.scope)))
-                    getter_calls += [decl, vget]
+        for module, variables in module_variables.items():
+            for var in variables:
+                getter = f'{module}__get__{var.name.lower()}'
+                vget = Assignment(lhs=var, rhs=InlineCall(ProcedureSymbol(getter, scope=var.scope)))
+                getter_calls += [vget]
         kernel.body.prepend(getter_calls)
 
         # Change imports to C header includes
         import_map = {}
-        for im in FindNodes(Import).visit(kernel.spec):
+        for im in kernel.imports:
             if str(im.module).upper() in self.__fortran_intrinsic_modules:
                 # Remove imports of Fortran intrinsic modules
                 import_map[im] = None
@@ -419,14 +427,13 @@ class FortranCTransformation(Transformation):
                 if isinstance(arg.type.dtype, DerivedType):
                     # Lower case type names for derived types
                     typedef = _type.dtype.typedef.clone(name=_type.dtype.typedef.name.lower())
-                    _type = _type.clone(dtype=DerivedType(typedef=typedef))
+                    _type = _type.clone(dtype=typedef.dtype)
                 kernel.symbol_attrs[arg.name] = _type
 
         symbol_map = {'epsilon': 'DBL_EPSILON'}
         function_map = {'min': 'fmin', 'max': 'fmax', 'abs': 'fabs',
                         'exp': 'exp', 'sqrt': 'sqrt', 'sign': 'copysign'}
         replace_intrinsics(kernel, symbol_map=symbol_map, function_map=function_map)
-        kernel.rescope_symbols()
 
         # Remove redundant imports
         sanitise_imports(kernel)
