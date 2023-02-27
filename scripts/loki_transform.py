@@ -36,6 +36,7 @@ from transformations.derived_types import DerivedTypeArgumentsTransformation
 from transformations.dr_hook import DrHookTransformation
 from transformations.single_column_claw import ExtractSCATransformation, CLAWTransformation
 from transformations.single_column_coalesced import SingleColumnCoalescedTransformation
+from transformations.single_column_coalesced2 import SingleColumnCoalesced2Transformation
 from transformations.scc_cuf import SccCufTransformation, HoistTemporaryArraysDeviceAllocatableTransformation
 
 
@@ -128,7 +129,7 @@ def cli(debug):
 @click.option('--remove-openmp', is_flag=True, default=False,
               help='Removes existing OpenMP pragmas in "!$loki data" regions.')
 @click.option('--mode', '-m', default='sca',
-              type=click.Choice(['idem', 'sca', 'claw', 'scc', 'scc-hoist', 'cuf-parametrise',
+              type=click.Choice(['idem', 'sca', 'claw', 'scc', 'scc2', 'scc-hoist', 'cuf-parametrise',
                                  'cuf-hoist', 'cuf-dynamic']),
               help='Transformation mode, selecting which code transformations to apply.')
 @click.option('--frontend', default='fp', type=click.Choice(['fp', 'ofp', 'omni']),
@@ -205,6 +206,15 @@ def convert(out_path, path, header, cpp, include, define, omni_include, xmod,
         vertical = scheduler.config.dimensions['vertical']
         block_dim = scheduler.config.dimensions['block_dim']
         transformation = SingleColumnCoalescedTransformation(
+            horizontal=horizontal, vertical=vertical, block_dim=block_dim,
+            directive='openacc', hoist_column_arrays='hoist' in mode
+        )
+
+    if mode in ['scc2', 'scc2-hoist']:
+        horizontal = scheduler.config.dimensions['horizontal']
+        vertical = scheduler.config.dimensions['vertical']
+        block_dim = scheduler.config.dimensions['block_dim']
+        transformation = SingleColumnCoalesced2Transformation(
             horizontal=horizontal, vertical=vertical, block_dim=block_dim,
             directive='openacc', hoist_column_arrays='hoist' in mode
         )
