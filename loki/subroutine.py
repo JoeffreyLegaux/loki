@@ -69,11 +69,13 @@ class Subroutine(ProgramUnit):
         Mark the object as incomplete, i.e. only partially parsed. This is
         typically the case when it was instantiated using the :any:`Frontend.REGEX`
         frontend and a full parse using one of the other frontends is pending.
+    parser_classes : :any:`RegexParserClass`, optional
+        Provide the list of parser classes used during incomplete regex parsing
     """
 
     def __init__(self, name, args=None, docstring=None, spec=None, body=None, contains=None,
                  prefix=None, bind=None, result_name=None, is_function=False, ast=None, source=None, parent=None,
-                 rescope_symbols=False, symbol_attrs=None, incomplete=False):
+                 rescope_symbols=False, symbol_attrs=None, incomplete=False, parser_classes=None):
         # First, store additional Subroutine-specific properties
         self._dummies = as_tuple(a.lower() for a in as_tuple(args))  # Order of dummy arguments
         self.prefix = as_tuple(prefix)
@@ -90,7 +92,7 @@ class Subroutine(ProgramUnit):
         super().__init__(
             name=name, docstring=docstring, spec=spec, contains=contains,
             ast=ast, source=source, parent=parent, rescope_symbols=rescope_symbols,
-            symbol_attrs=symbol_attrs, incomplete=incomplete
+            symbol_attrs=symbol_attrs, incomplete=incomplete, parser_classes=parser_classes
         )
 
     def __getstate__(self):

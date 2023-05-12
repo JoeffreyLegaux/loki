@@ -9,7 +9,10 @@ from abc import abstractmethod
 import weakref
 
 from loki import ir
-from loki.frontend import Frontend, parse_omni_source, parse_ofp_source, parse_fparser_source
+from loki.frontend import (
+    Frontend, parse_omni_source, parse_ofp_source, parse_fparser_source,
+    RegexParserClass
+)
 from loki.scope import Scope
 from loki.tools import CaseInsensitiveDict, as_tuple, flatten
 from loki.types import ProcedureType
@@ -53,17 +56,21 @@ class ProgramUnit(Scope):
         Mark the object as incomplete, i.e. only partially parsed. This is
         typically the case when it was instantiated using the :any:`Frontend.REGEX`
         frontend and a full parse using one of the other frontends is pending.
+    parser_classes : :any:`RegexParserClass`, optional
+        Provide the list of parser classes used during incomplete regex parsing
     """
 
     def __init__(self, name, docstring=None, spec=None, contains=None,
                  ast=None, source=None, parent=None,
-                 rescope_symbols=False, symbol_attrs=None, incomplete=False):
+                 rescope_symbols=False, symbol_attrs=None,
+                 incomplete=False, parser_classes=None):
         # Common properties
         assert name and isinstance(name, str)
         self.name = name
         self._ast = ast
         self._source = source
         self._incomplete = incomplete
+        self._parser_classes = parser_classes
 
         # Bring arguments into shape
         if spec is not None and not isinstance(spec, ir.Section):
@@ -237,7 +244,9 @@ class ProgramUnit(Scope):
         frontend = frontend_args.pop('frontend', Frontend.FP)
         definitions = frontend_args.get('definitions')
         xmods = frontend_args.get('xmods')
-        parser_classes = frontend_args.get('parser_classes')
+        parser_classes = frontend_args.get('parser_classes', RegexParserClass.AllClasses)
+        if frontend == Frontend.REGEX and self._parser_classes:
+            parser_classes = parser_classes | self._parser_classes
 
         # If this object does not have a parent, we create a temporary parent scope
         # and make sure the node exists in the parent scope. This way, the existing
