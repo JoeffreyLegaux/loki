@@ -429,17 +429,6 @@ class Sourcefile:
     subroutines = routines
 
     @property
-    def typedefs(self):
-        """
-        List of :class:`TypeDef` objects that are declared in the :any:`Module` in this :class:`Sourcefile`.
-        """
-        if self.ir is None:
-            return ()
-        return as_tuple(
-            tdef for module in self.modules for tdef in module.typedefs.values()
-        )
-
-    @property
     def all_subroutines(self):
         routines = self.subroutines
         routines += as_tuple(flatten(m.subroutines for m in self.modules))
@@ -448,9 +437,9 @@ class Sourcefile:
     @property
     def definitions(self):
         """
-        List of all definitions made in this sourcefile, i.e. modules, subroutines and types
+        List of all definitions made in this sourcefile, i.e. modules and subroutines
         """
-        return self.modules + self.subroutines + self.typedefs
+        return self.modules + self.subroutines
 
     def __getitem__(self, name):
         module_map = {m.name.lower(): m for m in self.modules}
