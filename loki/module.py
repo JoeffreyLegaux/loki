@@ -17,8 +17,9 @@ from loki.pragma_utils import pragmas_attached, process_dimension_pragmas
 from loki.program_unit import ProgramUnit
 from loki.scope import Scope
 from loki.subroutine import Subroutine
-from loki.tools import as_tuple
+from loki.tools import as_tuple, flatten
 from loki.types import ModuleType, SymbolAttributes
+from loki.visitors import FindNodes
 
 
 __all__ = ['Module']
@@ -277,6 +278,12 @@ class Module(ProgramUnit):
         self.rescope_symbols()
 
     @property
+    def variables(self):
+        return tuple(flatten(
+            decl.symbols for decl in FindNodes(VariableDeclaration).visit(self.spec or ())
+        ))
+
+    @property
     def definitions(self):
         """
         The list of IR nodes defined by this module
@@ -284,4 +291,4 @@ class Module(ProgramUnit):
         Returns :any:`Subroutine` and :any:`TypeDef` nodes declared
         in this module
         """
-        return self.subroutines + tuple(self.typedefs.values())
+        return self.subroutines + tuple(self.typedefs.values()) + self.variables
