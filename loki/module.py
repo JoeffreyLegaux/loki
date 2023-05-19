@@ -278,12 +278,6 @@ class Module(ProgramUnit):
         self.rescope_symbols()
 
     @property
-    def variables(self):
-        return tuple(flatten(
-            decl.symbols for decl in FindNodes(VariableDeclaration).visit(self.spec or ())
-        ))
-
-    @property
     def definitions(self):
         """
         The list of IR nodes defined by this module
@@ -291,4 +285,4 @@ class Module(ProgramUnit):
         Returns :any:`Subroutine` and :any:`TypeDef` nodes declared
         in this module
         """
-        return self.subroutines + tuple(self.typedefs.values()) + self.variables
+        return self.subroutines + self.typedefs + self.variables
