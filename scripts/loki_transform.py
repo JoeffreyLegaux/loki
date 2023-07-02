@@ -458,7 +458,8 @@ def ecphys(mode, config, header, source, build, cpp, directive, frontend):
     # Create and setup the scheduler for bulk-processing
     paths = [Path(s).resolve() for s in source]
     paths += [Path(h).resolve().parent for h in header]
-    scheduler = Scheduler(paths=paths, config=config, definitions=definitions, frontend=frontend, preprocess=cpp)
+    scheduler = Scheduler(paths=paths, config=config, definitions=definitions,
+                          frontend=frontend, preprocess=cpp, num_workers=1)
 
     # Backward insert argument shapes (for surface routines)
     scheduler.process(transformation=ArgumentArrayShapeAnalysis())

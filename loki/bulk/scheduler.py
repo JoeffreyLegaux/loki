@@ -25,6 +25,11 @@ from loki.module import Module
 __all__ = ['Scheduler', 'SchedulerConfig']
 
 
+def _perform_parse(source, build_args):
+    source.make_complete(**build_args)
+    return source
+
+
 class SchedulerConfig:
     """
     Configuration object for the transformation :any:`Scheduler` that
@@ -551,15 +556,16 @@ class Scheduler:
         build_args = self.build_args.copy()
         build_args['definitions'] = as_tuple(build_args['definitions'])
 
+
         with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
+            print('ml805 about to parse...')
             parse_futures = [
-                (item, executor.submit(item.source.make_complete, **build_args))
+                (item, executor.submit(_perform_parse, item.source, build_args))
                 for item in reversed(list(nx.topological_sort(self.item_graph)))
             ]
 
             for item, future in parse_futures:
                 item.source = future.result()
-        # _ = [parse.result() for parse in parse_futures]
 
         # TODO: The below effectively forces sequential execution
         # on an otherwise parallel process. We disable this, until
@@ -656,7 +662,8 @@ class Scheduler:
                         continue
 
                     # Use entry from item_map to ensure the original item is used in transformation
-                    _item = self.item_map[item.name]
+                    # _item = self.item_map[item.name]
+                    _item = item
 
                     # Process work item with appropriate kernel
                     transformation.apply(
