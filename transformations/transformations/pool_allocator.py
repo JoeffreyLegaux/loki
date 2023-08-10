@@ -13,7 +13,8 @@ from loki import (
     SymbolAttributes, BasicType, DerivedType, Quotient, IntLiteral, LogicLiteral,
     Variable, Array, Sum, Literal, Product, InlineCall, Comparison, RangeIndex, Cast,
     Intrinsic, Assignment, Conditional, CallStatement, Import, Allocation, Deallocation, is_dimension_constant,
-    Loop, Pragma, SubroutineItem, FindInlineCalls, Interface, ProcedureSymbol, LogicalNot, dataflow_analysis_attached
+    Loop, Pragma, SubroutineItem, FindInlineCalls, Interface, ProcedureSymbol, LogicalNot, dataflow_analysis_attached,
+    expression, RawSource
 )
 
 __all__ = ['TemporariesPoolAllocatorTransformation']
@@ -232,7 +233,7 @@ class TemporariesPoolAllocatorTransformation(Transformation):
         # in device code
         arg_pos = [routine.arguments.index(arg) for arg in routine.arguments if arg.type.optional]
         if arg_pos:
-            routine.arguments = routine.arguments[:arg_pos[0]] + (stack_arg,) + routine.arguments[arg_pos[0]:]
+             routine.arguments = routine.arguments[:arg_pos[0]] + (stack_arg,) + routine.arguments[arg_pos[0]:]
         else:
             routine.arguments += (stack_arg,)
 
@@ -292,7 +293,7 @@ class TemporariesPoolAllocatorTransformation(Transformation):
             stack_type_bytes = Cast(name='REAL', expression=Literal(1), kind=_kind)
             stack_type_bytes = InlineCall(Variable(name='C_SIZEOF'),
                                           parameters=as_tuple(stack_type_bytes))
-            stack_size_assign = Assignment(lhs=stack_size_var, rhs=Quotient(stack_size, stack_type_bytes))
+            stack_size_assign = Assignment(lhs=stack_size_var, rhs=Quotient(stack_size, Literal(8)))#, stack_type_bytes))
             body_prepend += [stack_size_assign]
 
             # Stack-size no longer guaranteed to be a multiple of 8-bytes, so we have to check here
@@ -304,6 +305,9 @@ class TemporariesPoolAllocatorTransformation(Transformation):
                                  else_body=None
             )
             body_prepend += [stack_size_check]
+            # enlarge = Assignment(lhs=stack_size_var, rhs=Product((Literal(16), stack_size_var)))
+            # body_prepend += [enlarge]
+            # body_prepend += [RawSource(text='print *, "ISTSZ: ", ISTSZ')]
 
             variables_append += [stack_size_var]
 
@@ -476,10 +480,15 @@ class TemporariesPoolAllocatorTransformation(Transformation):
 
         # Build expression for array size in bytes
         dim = arr.dimensions[0]
+        if isinstance(dim, expression.symbols.RangeIndex):
+            dim = Sum((dim.upper, Product((-1, dim.lower)), 1))
         for d in arr.dimensions[1:]:
-            dim = Product((dim, d))
-        arr_size = Product((dim, InlineCall(Variable(name='C_SIZEOF'),
-                                            parameters=as_tuple(self._get_c_sizeof_arg(arr)))))
+            # dim = Product((dim, d))
+            _dim = d
+            if isinstance(_dim, expression.symbols.RangeIndex):
+                _dim = Sum((_dim.upper, Product((-1, _dim.lower)), 1))
+            dim = Product((dim, _dim))
+        arr_size = Product((dim, Literal(8))) #InlineCall(Variable(name='C_SIZEOF'), parameters=as_tuple(self._get_c_sizeof_arg(arr)))))
 
         # Increment stack size
         stack_size = simplify(Sum((stack_size, arr_size)))
@@ -645,7 +654,7 @@ class TemporariesPoolAllocatorTransformation(Transformation):
             _real_size_bytes = InlineCall(Variable(name='C_SIZEOF'),
                                           parameters=as_tuple(_real_size_bytes))
             stack_incr = Assignment(
-                lhs=stack_end, rhs=Sum((stack_ptr, Product((stack_size_var, _real_size_bytes))))
+                lhs=stack_end, rhs=Sum((stack_ptr, Product((stack_size_var, Literal(8))))) #_real_size_bytes))))
             )
             loop_map[loop] = loop.clone(
                 body=loop.body[:assign_pos + 1] + (ptr_assignment, stack_incr) + loop.body[assign_pos + 1:]
@@ -658,6 +667,14 @@ class TemporariesPoolAllocatorTransformation(Transformation):
                 f'{self.__class__.__name__}: '
                 f'Could not find a block dimension loop in {routine.name}; no stack pointer assignment inserted.'
             )
+        # routine.body.prepend([RawSource(text='print *, "NGPBLKS: ", NGPBLKS')])
+        # routine.body.prepend([RawSource(text='print *, "KLON: ", KLON')])
+        # routine.body.prepend([RawSource(text='print *, "KLEV: ", KLEV')])
+        routine.body.prepend([RawSource(text="NGPBLKS = YDGEOMETRY%YRDIM%NGPBLKS")])
+        routine.body.prepend([RawSource(text="KLON = DIMS%KLON")])
+        routine.body.prepend([RawSource(text="KLEV = DIMS%KLEV")])
+        if "CONVECTION_LAYER" in routine.name.upper(): 
+            routine.body.prepend([RawSource("ITRAC = GEMSL%ITRAC")])
 
     def inject_pool_allocator_into_calls(self, routine, targets):
         """

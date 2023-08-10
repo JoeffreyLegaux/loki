@@ -377,7 +377,7 @@ def transpile(out_path, header, source, driver, cpp, include, define, frontend, 
 
 @cli.command('plan')
 @click.option('--mode', '-m', default='sca',
-              type=click.Choice(['idem', 'sca', 'claw', 'scc', 'scc-hoist']))
+              type=click.Choice(['idem', 'sca', 'claw', 'scc', 'scc-hoist', 'scc-stack']))
 @click.option('--config', '-c', type=click.Path(),
               help='Path to configuration file.')
 @click.option('--header', '-I', type=click.Path(), multiple=True,
@@ -412,7 +412,7 @@ def plan(mode, config, header, source, build, root, cpp, directive, frontend, ca
     scheduler = Scheduler(paths=paths, config=config, frontend=frontend, full_parse=False, preprocess=cpp)
 
     # Construct the transformation plan as a set of CMake lists of source files
-    scheduler.write_cmake_plan(filepath=plan_file, mode=mode, buildpath=build, rootpath=root)
+    scheduler.write_cmake_plan(filepath=plan_file, mode=mode.replace("-", "_"), buildpath=build, rootpath=root)
 
     # Output the resulting callgraph
     if callgraph:
@@ -421,7 +421,7 @@ def plan(mode, config, header, source, build, root, cpp, directive, frontend, ca
 
 @cli.command('ecphys')
 @click.option('--mode', '-m', default='sca',
-              type=click.Choice(['idem', 'sca', 'claw', 'scc', 'scc-hoist']))
+              type=click.Choice(['idem', 'sca', 'claw', 'scc', 'scc-hoist', 'scc-stack']))
 @click.option('--config', '-c', type=click.Path(),
               help='Path to configuration file.')
 @click.option('--header', '-I', type=click.Path(), multiple=True,
@@ -443,6 +443,9 @@ def ecphys(mode, config, header, source, build, cpp, directive, frontend):
     the SCC ("Single Column Coalesced") transformations, to large sets
     of interdependent subroutines.
     """
+
+    if mode == "scc-stack":
+        mode = "scc_stack"
 
     info('[Loki] Bulk-processing physics using config: %s ', config)
     config = SchedulerConfig.from_file(config)
@@ -492,10 +495,50 @@ def ecphys(mode, config, header, source, build, cpp, directive, frontend):
             directive=directive, hoist_column_arrays='hoist' in mode
         )
 
+    if mode in ['scc_stack']:
+        horizontal = scheduler.config.dimensions['horizontal']
+        vertical = scheduler.config.dimensions['vertical']
+        block_dim = scheduler.config.dimensions['block_dim']
+        transformation = (SCCBaseTransformation(horizontal=horizontal, directive=directive),)
+        transformation += (SCCDevectorTransformation(horizontal=horizontal, trim_vector_sections=False),)
+        transformation += (SCCDemoteTransformation(horizontal=horizontal),)
+        if not 'hoist' in mode:
+            transformation += (SCCRevectorTransformation(horizontal=horizontal),)
+        if 'hoist' in mode:
+            transformation += (SCCHoistTransformation(horizontal=horizontal, vertical=vertical, block_dim=block_dim),)
+        transformation += (SCCAnnotateTransformation(horizontal=horizontal, vertical=vertical,
+                                                     directive=directive, block_dim=block_dim,
+                                                     hoist_column_arrays='hoist' in mode),)
+
     if transformation:
-        scheduler.process(transformation=transformation)
+        if mode in ['scc_stack']:
+            for transform in transformation:
+             scheduler.process(transformation=transform)
+        else:
+            scheduler.process(transformation=transformation)
     else:
         raise RuntimeError('[Loki] Convert could not find specified Transformation!')
+
+    if mode in ['idem-stack', 'scc_stack']:
+        if frontend == Frontend.OMNI:
+            # To make the pool allocator size derivation work correctly, we need
+            # to normalize the 1:end-style index ranges that OMNI introduces
+            class NormalizeRangeIndexingTransformation(Transformation):
+                def transform_subroutine(self, routine, **kwargs):
+                    normalize_range_indexing(routine)
+
+            scheduler.process(transformation=NormalizeRangeIndexingTransformation())
+
+        horizontal = scheduler.config.dimensions['horizontal']
+        vertical = scheduler.config.dimensions['vertical']
+        block_dim = scheduler.config.dimensions['block_dim']
+        directive = {'idem-stack': 'openmp', 'scc_stack': 'openacc'}[mode]
+        transformation = TemporariesPoolAllocatorTransformation(
+            block_dim=block_dim, directive=directive, check_bounds='scc' not in mode
+        )
+        scheduler.process(transformation=transformation, reverse=True)
+
+    mode = mode.replace("-", "_")
 
     # Apply the dependency-injection transformation
     dependency = DependencyTransformation(mode='module', module_suffix='_MOD',

@@ -778,6 +778,7 @@ class Scheduler:
                     sources_to_append += [newsource]
                     sources_to_remove += [sourcepath]
 
+        sources_to_append += ["/perm/nams/ifs-bundle-h24ms1/source/ifs-source/arpifs/phys_ec/stack_mod.F90"]
         info(f'[Loki] CMakePlanner writing plan: {filepath}')
         with Path(filepath).open('w') as f:
             s_transform = '\n'.join(f'    {s}' for s in sources_to_transform)

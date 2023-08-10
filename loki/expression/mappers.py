@@ -559,6 +559,7 @@ class LokiIdentityMapper(IdentityMapper):
         recurse_to_declaration_attributes = kwargs['recurse_to_declaration_attributes'] or expr.scope is None
         kwargs['recurse_to_declaration_attributes'] = False
 
+        new_type = None
         if recurse_to_declaration_attributes:
             old_type = expr.type
             kind = self.rec(old_type.kind, *args, **kwargs)
@@ -600,6 +601,8 @@ class LokiIdentityMapper(IdentityMapper):
                     # Update symbol table entry
                     expr.scope.symbol_attrs[expr.name] = new_type
 
+        if new_type is None:
+            new_type = expr.type
         parent = self.rec(expr.parent, *args, **kwargs)
         if expr.scope is None:
             if parent is expr.parent and not is_type_changed:
