@@ -673,6 +673,9 @@ class TemporariesPoolAllocatorTransformation(Transformation):
         routine.body.prepend([RawSource(text="NGPBLKS = YDGEOMETRY%YRDIM%NGPBLKS")])
         routine.body.prepend([RawSource(text="KLON = DIMS%KLON")])
         routine.body.prepend([RawSource(text="KLEV = DIMS%KLEV")])
+        if "TURBULENCE_LAYER" in routine.name.upper():
+            routine.body.prepend([RawSource(text="KTILES = DIMS%KTILES")])
+            routine.body.prepend([RawSource(text="KLEVS = DIMS%KLEVS")])
         if "CONVECTION_LAYER" in routine.name.upper(): 
             routine.body.prepend([RawSource("ITRAC = GEMSL%ITRAC")])
 
@@ -690,7 +693,7 @@ class TemporariesPoolAllocatorTransformation(Transformation):
                 if call.name in [s for i in FindNodes(Interface).visit(routine.spec) for s in i.symbols]:
                     _ = self._get_stack_arg(call.routine)
 
-                if call.routine != BasicType.DEFERRED and self.stack_argument_name in call.routine.arguments:
+                if call.routine != BasicType.DEFERRED and self.stack_argument_name in call.routine.arguments and self.stack_local_var_name not in call.arguments:
                     arg_idx = call.routine.arguments.index(self.stack_argument_name)
                     arguments = call.arguments
                     call_map[call] = call.clone(arguments=arguments[:arg_idx] + (stack_var,) + arguments[arg_idx:])
