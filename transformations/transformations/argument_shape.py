@@ -149,7 +149,8 @@ class ExplicitArgumentArrayShapeTransformation(Transformation):
                 arg_keys = dict(call.arg_iter()).keys()
                 missing = [a for a in callee.arguments if a not in arg_keys
                            and not a.type.optional and a in dim_vars]
-
+                # TODO: still needed?
+                missing = [_.clone(type=_.type.clone(optional=True)) for _ in missing]
                 # Add missing dimension variables (scalars
                 new_kwargs = tuple((str(m), m) for m in missing if m.type.dtype == BasicType.INTEGER)
                 call_map[call] = call.clone(kwarguments=call.kwarguments + new_kwargs)
