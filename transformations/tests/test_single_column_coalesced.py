@@ -11,7 +11,7 @@ from loki import (
     OMNI, OFP, Subroutine, Dimension, FindNodes, Loop, Assignment,
     CallStatement, Conditional, Scalar, Array, Pragma, pragmas_attached,
     fgen, Sourcefile, Section, SubroutineItem, pragma_regions_attached, PragmaRegion,
-    is_loki_pragma, IntLiteral, RangeIndex, Comment
+    is_loki_pragma, IntLiteral, RangeIndex, Comment, gettempdir, Scheduler, SchedulerConfig
 )
 from conftest import available_frontends
 from transformations import (
@@ -394,6 +394,179 @@ def test_scc_hoist_multiple_kernels(frontend, horizontal, vertical, blocking):
     assert 'jl' in kernel.argnames
     assert kernel.variable_map['jl'].type.intent.lower() == 'in'
 
+
+@pytest.mark.parametrize('frontend', available_frontends())
+def test_scc_hoist_multiple_kernels_loops(frontend, horizontal, vertical, blocking):
+    """
+    Test hoisting of column temporaries to "driver" level.
+    """
+
+    fcode_driver = """
+  SUBROUTINE driver(nlon, nz, q, nb)
+    use kernel_mod, only: kernel
+    implicit none
+    INTEGER, INTENT(IN)   :: nlon, nz, nb  ! Size of the horizontal and vertical
+    REAL, INTENT(INOUT)   :: q(nlon,nz,nb)
+    REAL                  :: tmp(nlon,nz,nb)
+    INTEGER :: b, start, end
+
+    start = 1
+    end = nlon
+    tmp = 0.0
+    do b=1, nb
+      call kernel(start, end, nlon, nz, q(:,:,b))
+      
+      DO jk = 2, nz
+        DO jl = start, end
+          tmp(jl, jk, b) = 2.0 * jk * jl
+          q(jl, jk, b) = q(jl, jk-1, b) * c + tmp(jl, jk, b)
+        END DO
+      END DO
+
+      ! A second call, to check multiple calls are honored
+      call kernel(start, end, nlon, nz, q(:,:,b))
+      
+      DO jk = 2, nz
+        DO jl = start, end
+          q(jl, jk, b) = (-1.0) * q(jl, jk, b)
+        END DO
+      END DO
+    end do
+  END SUBROUTINE driver
+""".strip()
+
+    fcode_kernel = """
+MODULE kernel_mod
+implicit none
+CONTAINS
+  SUBROUTINE kernel(start, end, nlon, nz, q)
+    implicit none
+    INTEGER, INTENT(IN) :: start, end  ! Iteration indices
+    INTEGER, INTENT(IN) :: nlon, nz    ! Size of the horizontal and vertical
+    REAL, INTENT(INOUT) :: q(nlon,nz)
+    REAL :: t(nlon,nz)
+    INTEGER :: jl, jk
+    REAL :: c
+
+    c = 5.345
+    DO jk = 2, nz
+      DO jl = start, end
+        t(jl, jk) = c * k
+        q(jl, jk) = q(jl, jk-1) + t(jl, jk) * c
+      END DO
+    END DO
+
+    ! The scaling is purposefully upper-cased
+    DO JL = START, END
+      Q(JL, NZ) = Q(JL, NZ) * C
+    END DO
+  END SUBROUTINE kernel
+END MODULE kernel_mod
+""".strip()
+
+    basedir = gettempdir() / 'test_pool_allocator_args_vs_kwargs'
+    basedir.mkdir(exist_ok=True)
+    (basedir / 'driver.F90').write_text(fcode_driver)
+    (basedir / 'kernel.F90').write_text(fcode_kernel)
+
+    config = {
+        'default': {
+            'mode': 'idem',
+            'role': 'kernel',
+            'expand': True,
+            'strict': True
+        },
+        'routine': [{
+            'name': 'driver',
+            'role': 'driver'
+        }]
+    }
+    scheduler = Scheduler(paths=[basedir], config=SchedulerConfig.from_dict(config), frontend=frontend)
+
+    driver = scheduler.item_map["#driver"].routine
+    kernel = scheduler.item_map["kernel_mod#kernel"].routine
+
+    # horizontal = scheduler.config.dimensions['horizontal']
+    # vertical = scheduler.config.dimensions['vertical']
+    # block_dim = scheduler.config.dimensions['block_dim']
+    transformation = (SCCBaseTransformation(horizontal=horizontal, directive='openacc'),)
+    transformation += (SCCDevectorTransformation(horizontal=horizontal, trim_vector_sections=False),)
+    transformation += (SCCDemoteTransformation(horizontal=horizontal),)
+    # if not 'hoist' in mode:
+    transformation += (SCCRevectorTransformation(horizontal=horizontal),)
+    # if 'hoist' in mode:
+    #     transformation += (SCCHoistTransformation(horizontal=horizontal, vertical=vertical, block_dim=block_dim),)
+    transformation += (SCCAnnotateTransformation(horizontal=horizontal, vertical=vertical,
+                                                 directive='openacc', block_dim=blocking,
+                                                 hoist_column_arrays=False),)
+    for transform in transformation:
+        scheduler.process(transformation=transform)
+
+    print("-----------------")
+    print(fgen(driver))
+    print("-----------------")
+    print(fgen(kernel))
+    print("-----------------")
+
+    # kernel = Subroutine.from_source(fcode_kernel, frontend=frontend)
+    # driver = Subroutine.from_source(fcode_driver, frontend=frontend)
+    # driver.enrich_calls(kernel)  # Attach kernel source to driver call
+
+    # scc_transform = (SCCDevectorTransformation(horizontal=horizontal),)
+    # scc_transform += (SCCHoistTransformation(horizontal=horizontal, vertical=vertical,
+    #                                        block_dim=blocking),)
+    # for transform in scc_transform:
+    #     transform.apply(driver, role='driver', targets=['compute_column'])
+    #     transform.apply(kernel, role='kernel')
+
+    # print(fgen(driver))
+    # print(fgen(kernel))
+
+    # Ensure we have only one loop left in kernel
+    """
+    kernel_loops = FindNodes(Loop).visit(kernel.body)
+    assert len(kernel_loops) == 1
+    assert kernel_loops[0].variable == 'jk'
+    assert kernel_loops[0].bounds == '2:nz'
+
+    # Ensure all expressions and array indices are unchanged
+    assigns = FindNodes(Assignment).visit(kernel.body)
+    assert fgen(assigns[1]).lower() == 't(jl, jk) = c*k'
+    assert fgen(assigns[2]).lower() == 'q(jl, jk) = q(jl, jk - 1) + t(jl, jk)*c'
+    assert fgen(assigns[3]).lower() == 'q(jl, nz) = q(jl, nz)*c'
+
+    # Ensure we have two vector loops, nested in one driver loop
+    driver_loops = FindNodes(Loop).visit(driver.body)
+    assert len(driver_loops) == 3
+    assert driver_loops[1] in FindNodes(Loop).visit(driver_loops[0].body)
+    assert driver_loops[2] in FindNodes(Loop).visit(driver_loops[0].body)
+    assert driver_loops[0].variable == 'b'
+    assert driver_loops[0].bounds == '1:nb'
+    assert driver_loops[1].variable == 'jl'
+    assert driver_loops[1].bounds == 'start:end'
+    assert driver_loops[2].variable == 'jl'
+    assert driver_loops[2].bounds == 'start:end'
+
+    # Ensure we have two kernel calls in the driver loop
+    kernel_calls = FindNodes(CallStatement).visit(driver_loops[0])
+    assert len(kernel_calls) == 2
+    assert kernel_calls[0].name == 'compute_column'
+    assert kernel_calls[1].name == 'compute_column'
+    assert ('jl', 'jl') in kernel_calls[0].kwarguments
+    assert 't(:,:,b)' in kernel_calls[0].arguments
+    assert ('jl', 'jl') in kernel_calls[1].kwarguments
+    assert 't(:,:,b)' in kernel_calls[1].arguments
+
+    # Ensure that column local `t(nlon,nz)` has been hoisted
+    assert 't' in kernel.argnames
+    assert kernel.variable_map['t'].type.intent.lower() == 'inout'
+    # TODO: Shape doesn't translate correctly yet.
+    assert driver.variable_map['t'].dimensions == ('nlon', 'nz', 'nb')
+
+    # Ensure that the loop index variable is correctly promoted
+    assert 'jl' in kernel.argnames
+    assert kernel.variable_map['jl'].type.intent.lower() == 'in'
+    """
 
 @pytest.mark.parametrize('frontend', available_frontends())
 def test_scc_annotate_openacc(frontend, horizontal, vertical, blocking):

@@ -343,7 +343,7 @@ class SCCAnnotateTransformation(Transformation):
             routine.body = Transformer(mapper).visit(routine.body)
 
     @classmethod
-    def kernel_annotate_sequential_loops_openacc(cls, routine, horizontal):
+    def kernel_annotate_sequential_loops_openacc(cls, routine, horizontal, block_dim=None):
         """
         Insert ``!$acc loop seq`` annotations around all loops that
         are not horizontal vector loops.
@@ -355,6 +355,7 @@ class SCCAnnotateTransformation(Transformation):
         horizontal: :any:`Dimension`
             The dimension object specifying the horizontal vector dimension
         """
+        block_dim_index = None if block_dim is None else block_dim.index
         with pragmas_attached(routine, ir.Loop):
 
             for loop in FindNodes(ir.Loop).visit(routine.body):
@@ -362,7 +363,7 @@ class SCCAnnotateTransformation(Transformation):
                 if loop.pragma and any('nodep' in p.content.lower() for p in as_tuple(loop.pragma)):
                     continue
 
-                if loop.variable != horizontal.index:
+                if loop.variable != horizontal.index and loop.variable != block_dim_index:
                     # Perform pragma addition in place to avoid nested loop replacements
                     loop._update(pragma=(ir.Pragma(keyword='acc', content='loop seq'),))
 
@@ -514,6 +515,17 @@ class SCCAnnotateTransformation(Transformation):
                     self.directive, driver_loop, kernel_loop,
                     self.block_dim, column_locals, num_threads
                 )
+
+        if self.directive == 'openacc':
+            # self.insert_annotations(routine, self.horizontal, self.vertical, False)
+            # Mark all non-parallel loops as `!$acc loop seq`
+            self.kernel_annotate_sequential_loops_openacc(routine, self.horizontal, self.block_dim)
+            # Mark all parallel vector loops as `!$acc loop vector`
+            self.kernel_annotate_vector_loops_openacc(routine, self.horizontal, self.vertical)
+
+        section_mapper = {s: s.body for s in FindNodes(ir.Section).visit(routine.body) if s.label == 'vector_section'}
+        if section_mapper:
+            routine.body = Transformer(section_mapper).visit(routine.body)
 
     @classmethod
     def device_alloc_column_locals(cls, routine, column_locals):

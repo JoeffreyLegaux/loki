@@ -165,8 +165,8 @@ class SCCDevectorTransformation(Transformation):
         """
         role = kwargs['role']
 
-        if role == 'kernel':
-            self.process_kernel(routine)
+        # if role == 'kernel':
+        self.process_kernel(routine)
 
     def process_kernel(self, routine):
         """
@@ -250,8 +250,8 @@ class SCCRevectorTransformation(Transformation):
         """
         role = kwargs['role']
 
-        if role == 'kernel':
-            self.process_kernel(routine)
+        # if role == 'kernel':
+        self.process_kernel(routine)
 
     def process_kernel(self, routine):
         """
