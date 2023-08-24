@@ -288,7 +288,7 @@ class SCCAnnotateTransformation(Transformation):
         self.hoist_column_arrays = hoist_column_arrays
 
     @classmethod
-    def kernel_annotate_vector_loops_openacc(cls, routine, horizontal, vertical):
+    def kernel_annotate_vector_loops_openacc(cls, routine, horizontal, vertical, role='kernel'):
         """
         Insert ``!$acc loop vector`` annotations around horizontal vector
         loops, including the necessary private variable declarations.
@@ -336,14 +336,17 @@ class SCCAnnotateTransformation(Transformation):
                     # Construct pragma and wrap entire body in vector loop
                     private_arrs = ', '.join(v.name for v in private_arrays)
                     pragma = ()
-                    private_clause = '' if not private_arrays else f' private({private_arrs})'
+                    if role == 'driver':
+                        private_clause = ''
+                    else:
+                        private_clause = '' if not private_arrays else f' private({private_arrs})'
                     pragma = ir.Pragma(keyword='acc', content=f'loop vector{private_clause}')
                     mapper[loop] = loop.clone(pragma=(pragma,))
 
             routine.body = Transformer(mapper).visit(routine.body)
 
     @classmethod
-    def kernel_annotate_sequential_loops_openacc(cls, routine, horizontal, block_dim=None):
+    def kernel_annotate_sequential_loops_openacc(cls, routine, horizontal, block_dim=None, ignore=()):
         """
         Insert ``!$acc loop seq`` annotations around all loops that
         are not horizontal vector loops.
@@ -363,7 +366,7 @@ class SCCAnnotateTransformation(Transformation):
                 if loop.pragma and any('nodep' in p.content.lower() for p in as_tuple(loop.pragma)):
                     continue
 
-                if loop.variable != horizontal.index and loop.variable != block_dim_index:
+                if loop.variable != horizontal.index and loop.variable != block_dim_index and loop not in ignore:
                     # Perform pragma addition in place to avoid nested loop replacements
                     loop._update(pragma=(ir.Pragma(keyword='acc', content='loop seq'),))
 
@@ -492,6 +495,7 @@ class SCCAnnotateTransformation(Transformation):
                 num_threads = size_expr
                 break
 
+        ignore = []
         with pragmas_attached(routine, ir.Loop, attach_pragma_post=True):
             for call in FindNodes(ir.CallStatement).visit(routine.body):
                 if not call.name in targets:
@@ -504,6 +508,7 @@ class SCCAnnotateTransformation(Transformation):
                     # Skip if there are no driver loops
                     continue
                 driver_loop = loops[0]
+                ignore.append(driver_loop)
                 kernel_loop = [l for l in loops if l.variable == self.horizontal.index]
                 if kernel_loop:
                     kernel_loop = kernel_loop[0]
@@ -519,9 +524,9 @@ class SCCAnnotateTransformation(Transformation):
         if self.directive == 'openacc':
             # self.insert_annotations(routine, self.horizontal, self.vertical, False)
             # Mark all non-parallel loops as `!$acc loop seq`
-            self.kernel_annotate_sequential_loops_openacc(routine, self.horizontal, self.block_dim)
+            self.kernel_annotate_sequential_loops_openacc(routine, self.horizontal, self.block_dim, ignore=ignore)
             # Mark all parallel vector loops as `!$acc loop vector`
-            self.kernel_annotate_vector_loops_openacc(routine, self.horizontal, self.vertical)
+            self.kernel_annotate_vector_loops_openacc(routine, self.horizontal, self.vertical, role='driver')
 
         section_mapper = {s: s.body for s in FindNodes(ir.Section).visit(routine.body) if s.label == 'vector_section'}
         if section_mapper:
