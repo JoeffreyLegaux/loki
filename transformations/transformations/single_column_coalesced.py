@@ -496,6 +496,8 @@ class SCCAnnotateTransformation(Transformation):
                 break
 
         ignore = []
+        mapper = {}
+        driver_loops = []
         with pragmas_attached(routine, ir.Loop, attach_pragma_post=True):
             for call in FindNodes(ir.CallStatement).visit(routine.body):
                 if not call.name in targets:
@@ -508,6 +510,7 @@ class SCCAnnotateTransformation(Transformation):
                     # Skip if there are no driver loops
                     continue
                 driver_loop = loops[0]
+                driver_loops.append(driver_loop)
                 ignore.append(driver_loop)
                 kernel_loop = [l for l in loops if l.variable == self.horizontal.index]
                 if kernel_loop:
@@ -526,7 +529,24 @@ class SCCAnnotateTransformation(Transformation):
             # Mark all non-parallel loops as `!$acc loop seq`
             self.kernel_annotate_sequential_loops_openacc(routine, self.horizontal, self.block_dim, ignore=ignore)
             # Mark all parallel vector loops as `!$acc loop vector`
-            self.kernel_annotate_vector_loops_openacc(routine, self.horizontal, self.vertical, role='driver')
+            # self.kernel_annotate_vector_loops_openacc(routine, self.horizontal, self.vertical, role='driver')
+            ##
+            # mapper = {}
+            driver_loop_mapper = {}
+            with pragmas_attached(routine, ir.Loop):
+                for driver_loop in driver_loops:
+                    mapper = {}
+                    for loop in FindNodes(ir.Loop).visit(driver_loop.body):
+                        if loop.variable == self.horizontal.index:
+                            # Construct pragma and wrap entire body in vector loop
+                            private_clause = ''
+                            pragma = ir.Pragma(keyword='acc', content=f'loop vector{private_clause}')
+                            mapper[loop] = loop.clone(pragma=(pragma,))
+                    new_driver_loop = Transformer(mapper).visit(driver_loop.body)
+                    driver_loop_mapper[driver_loop] = new_driver_loop
+            # print(f"vector mapper: {mapper}")
+            routine.body = Transformer(driver_loop_mapper).visit(routine.body)
+            ##
 
         section_mapper = {s: s.body for s in FindNodes(ir.Section).visit(routine.body) if s.label == 'vector_section'}
         if section_mapper:

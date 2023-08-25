@@ -11,7 +11,7 @@ from loki.expression import symbols as sym
 from loki import (
      Transformation, FindNodes, ir, FindScopes, as_tuple, flatten, Transformer,
      NestedTransformer, FindVariables, demote_variables, is_dimension_constant,
-     is_loki_pragma, dataflow_analysis_attached, BasicType
+     is_loki_pragma, dataflow_analysis_attached, BasicType, fgen
 )
 from transformations.single_column_coalesced import SCCBaseTransformation
 
@@ -85,6 +85,7 @@ class SCCDevectorTransformation(Transformation):
 
             if call in section:
                 # If the call is at the current section's level, it's a separator
+                # print(f"seperator call: {call.name}")
                 separator_nodes.append(call)
 
             else:
@@ -164,9 +165,13 @@ class SCCDevectorTransformation(Transformation):
             Role of the subroutine in the call tree; should be ``"kernel"``
         """
         role = kwargs['role']
+        item = kwargs.get('item', None)
+        targets = kwargs.get('targets', None)
 
-        # if role == 'kernel':
-        self.process_kernel(routine)
+        if role == 'kernel':
+            self.process_kernel(routine)
+        else:
+            self.process_driver(routine, targets=targets, item=item)
 
     def process_kernel(self, routine):
         """
@@ -192,6 +197,64 @@ class SCCDevectorTransformation(Transformation):
         # Replace sections with marked Section node
         section_mapper = {s: ir.Section(body=s, label='vector_section') for s in sections}
         routine.body = NestedTransformer(section_mapper).visit(routine.body)
+
+    def process_driver(self, routine, targets=None, item=None):
+
+        driver_loop_map = {}
+        driver_loops = []
+        new_driver_loops = []
+        for call in FindNodes(ir.CallStatement).visit(routine.body):
+            if not call.name in targets:
+                continue
+
+            # Find the driver loop by checking the call's heritage
+            ancestors = flatten(FindScopes(call).visit(routine.body))
+            loops = [a for a in ancestors if isinstance(a, ir.Loop)]
+            if not loops:
+                # Skip if there are no driver loops
+                continue
+            driver_loop = loops[0]
+            kernel_loop = [l for l in loops if l.variable == self.horizontal.index]
+            if kernel_loop:
+                kernel_loop = kernel_loop[0]
+
+            assert not driver_loop == kernel_loop
+            driver_loops.append(driver_loop)
+
+            # self.kernel_remove_vector_loops(driver_loop, self.horizontal)
+            ##
+            loop_map = {}
+            for loop in FindNodes(ir.Loop).visit(driver_loop.body):
+                if loop.variable == self.horizontal.index:
+                    loop_map[loop] = loop.body
+            # driver_loop.body = Transformer(loop_map).visit(driver_loop.body)
+            new_driver_loop = Transformer(loop_map).visit(driver_loop.body)
+            new_driver_loop = driver_loop.clone(body=new_driver_loop)
+            new_driver_loops.append(new_driver_loop)
+            # print("new driver loop -------")
+            # print(fgen(new_driver_loop))
+            # print("-------")
+            driver_loop_map[driver_loop] = new_driver_loop
+            ##
+
+        # print(f"driver_loop_map: {driver_loop_map}")
+        routine.body = Transformer(driver_loop_map).visit(routine.body)
+
+        driver_loop_map = {}
+        for driver_loop in new_driver_loops: #driver_loops:
+            # Extract vector-level compute sections from the kernel
+            sections = self.extract_vector_sections(driver_loop.body, self.horizontal)
+            # print(f"sections: {sections}")
+
+            # Replace sections with marked Section node
+            section_mapper = {s: ir.Section(body=s, label='vector_section') for s in sections}
+            # print(f"section_mapper: {section_mapper}")
+            new_driver_loop = NestedTransformer(section_mapper).visit(driver_loop)
+            driver_loop_map[driver_loop] = new_driver_loop
+        # routine.body = NestedTransformer(section_mapper).visit(routine.body)
+        # print(f"here driver_loop_map: {driver_loop_map}")
+        routine.body = Transformer(driver_loop_map).visit(routine.body)
+
 
 
 class SCCRevectorTransformation(Transformation):
@@ -249,9 +312,13 @@ class SCCRevectorTransformation(Transformation):
             Role of the subroutine in the call tree; should be ``"kernel"``
         """
         role = kwargs['role']
+        item = kwargs.get('item', None)
+        targets = kwargs.get('targets', None)
 
         # if role == 'kernel':
         self.process_kernel(routine)
+        # else:
+        #     self.process_driver(routine, targets=targets, item=item)
 
     def process_kernel(self, routine):
         """
@@ -270,6 +337,30 @@ class SCCRevectorTransformation(Transformation):
                           if s.label == 'vector_section'}
         routine.body = NestedTransformer(mapper).visit(routine.body)
 
+    def process_driver(self, routine, targets=None, item=None):
+        for call in FindNodes(ir.CallStatement).visit(routine.body):
+            if not call.name in targets:
+                continue
+
+            # Find the driver loop by checking the call's heritage
+            ancestors = flatten(FindScopes(call).visit(routine.body))
+            loops = [a for a in ancestors if isinstance(a, ir.Loop)]
+            if not loops:
+                # Skip if there are no driver loops
+                continue
+            driver_loop = loops[0]
+            kernel_loop = [l for l in loops if l.variable == self.horizontal.index]
+            if kernel_loop:
+                kernel_loop = kernel_loop[0]
+
+            assert not driver_loop == kernel_loop
+
+            mapper = {s.body: self.wrap_vector_section(s.body, routine, self.horizontal)
+                      for s in FindNodes(ir.Section).visit(driver_loop.body)
+                      if s.label == 'vector_section'}
+            # print(f"mapper: {mapper}")
+            # driver_loop.body = NestedTransformer(mapper).visit(driver_loop.body)
+            routine.body = NestedTransformer(mapper).visit(routine.body)
 
 class SCCDemoteTransformation(Transformation):
     """
