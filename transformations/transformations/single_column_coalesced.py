@@ -541,11 +541,14 @@ class SCCAnnotateTransformation(Transformation):
                             # Construct pragma and wrap entire body in vector loop
                             private_clause = ''
                             pragma = ir.Pragma(keyword='acc', content=f'loop vector{private_clause}')
-                            mapper[loop] = loop.clone(pragma=(pragma,))
-                    new_driver_loop = Transformer(mapper).visit(driver_loop.body)
-                    driver_loop_mapper[driver_loop] = new_driver_loop
+                            loop._update(pragma=(pragma,))
+                            # mapper[loop] = loop.clone(pragma=(pragma,))
+                    # new_driver_loop = Transformer(mapper).visit(driver_loop.body)
+                    # new_driver_loop = driver_loop.clone(body=new_driver_loop)
+                    # driver_loop_mapper[driver_loop] = new_driver_loop
             # print(f"vector mapper: {mapper}")
-            routine.body = Transformer(driver_loop_mapper).visit(routine.body)
+            # print(f"driver_loop_mapper: {driver_loop_mapper}")
+            # routine.body = Transformer(driver_loop_mapper).visit(routine.body)
             ##
 
         section_mapper = {s: s.body for s in FindNodes(ir.Section).visit(routine.body) if s.label == 'vector_section'}
