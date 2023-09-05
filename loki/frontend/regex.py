@@ -42,6 +42,7 @@ class RegexParserClass(Flag):
     pattern matching can be switched on and off for some pattern classes, and thus the overall
     parse time reduced.
     """
+    EmptyClass = 0
     ProgramUnitClass = auto()
     InterfaceClass = auto()
     ImportClass = auto()
@@ -447,7 +448,8 @@ class ModulePattern(Pattern):
             contains = None
 
         module.__initialize__(  # pylint: disable=unnecessary-dunder-call
-            name=module.name, spec=spec, contains=contains, source=module.source, incomplete=True
+            name=module.name, spec=spec, contains=contains, source=module.source, incomplete=True,
+            parser_classes=parser_classes
         )
 
         if match.span()[0] > 0:
@@ -538,7 +540,8 @@ class SubroutineFunctionPattern(Pattern):
 
         routine.__initialize__(  # pylint: disable=unnecessary-dunder-call
             name=routine.name, args=routine._dummies, is_function=routine.is_function,
-            prefix=prefix, spec=spec, contains=contains, source=routine.source, incomplete=True
+            prefix=prefix, spec=spec, contains=contains, source=routine.source,
+            incomplete=True, parser_classes=parser_classes
         )
 
         if match.span()[0] > 0:
@@ -897,7 +900,8 @@ class VariableDeclarationPattern(Pattern):
     def __init__(self):
         super().__init__(
             r'^(((?:type|class)[ \t]*\([ \t]*(?P<typename>\w+)[ \t]*\))|' # TYPE or CLASS keyword with typename
-            r'^([ \t]*(?P<basic_type>(logical|real|integer|complex|character))(\((kind|len)=[a-z0-9_-]+\))?[ \t]*))'
+            r'^([ \t]*(?P<basic_type>(logical|real|integer|complex|character))'
+            r'(?P<param>\((kind|len)=[a-z0-9_-]+\))?[ \t]*))'
             r'(?:[ \t]*,[ \t]*[a-z]+(?:\((.(\(.*\))?)*?\))?)*'  # Optional attributes
             r'(?:[ \t]*::)?'  # Optional `::` delimiter
             r'[ \t]*'  # Some white space
@@ -928,6 +932,11 @@ class VariableDeclarationPattern(Pattern):
         else:
             type_ = SymbolAttributes(BasicType.from_str(match['basic_type']))
         assert type_
+
+        if match['param']:
+            param = match['param'].strip().strip('()').split('=')
+            if len(param) == 1 or param[0].lower() == 'kind':
+                type_ = type_.clone(kind=sym.Variable(name=param[-1], scope=scope))
 
         variables = self._remove_quoted_string_nested_parentheses(match['variables'])  # Remove dimensions
         variables = re.sub(r'=(?:>)?[^,]*(?=,|$)', r'', variables) # Remove initialization

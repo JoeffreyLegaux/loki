@@ -21,7 +21,7 @@ from loki.subroutine import Subroutine
 from loki.module import Module
 
 
-__all__ = ['Scheduler', 'SchedulerConfig']
+__all__ = ['Scheduler', 'SchedulerConfig', 'SGraph']
 
 
 class SchedulerConfig:
@@ -70,7 +70,10 @@ class SchedulerConfig:
 
     @classmethod
     def from_dict(cls, config):
-        default = config['default']
+        """
+        Populate :any:`SchedulerConfig` from the given :any:`dict` :data:`config`
+        """
+        default = config.get('default', {})
         if 'routine' in config:
             config['routines'] = OrderedDict((r['name'], r) for r in config.get('routine', []))
         else:
@@ -98,12 +101,49 @@ class SchedulerConfig:
 
     @classmethod
     def from_file(cls, path):
+        """
+        Populate :any:`SchedulerConfig` from a toml file at :data:`path`
+        """
         import toml  # pylint: disable=import-outside-toplevel
         # Load configuration file and process options
         with Path(path).open('r') as f:
             config = toml.load(f)
 
         return cls.from_dict(config)
+
+    @staticmethod
+    def match_item_keys(item_name, keys):
+        """
+        Helper routine to match a :any:`Item` name, which includes a scope,
+        to entries in a config property, where names are allowed to appear
+        without the relevant scope names
+        """
+        item_name = item_name.lower()
+        item_names = (item_name, item_name[item_name.find('#')+1:])
+        return tuple(key for key in keys or () if key in item_names)
+
+    def create_item_config(self, name):
+        """
+        Create the bespoke config `dict` for an :any:`Item`
+
+        The resulting config object contains the :attr:`default`
+        values and any item-specific overwrites and additions.
+        """
+        keys = self.match_item_keys(name, self.routines)
+        if len(keys) > 1:
+            if self.default.get('strict'):
+                raise RuntimeError(f'{name} matches multiple config entries: {", ".join(keys)}')
+            warning(f'{name} matches multiple config entries: {", ".join(keys)}')
+        item_conf = self.default.copy()
+        for key in keys:
+            item_conf.update(self.routines[key])
+        return item_conf
+
+    def is_disabled(self, name):
+        """
+        Check if the item with the given :data:`name` is marked as `disabled`
+        """
+        return len(self.match_item_keys(name, self.disable)) > 0
 
 
 class Scheduler:
@@ -788,3 +828,102 @@ class Scheduler:
 
             s_remove = '\n'.join(f'    {s}' for s in sources_to_remove)
             f.write(f'set( LOKI_SOURCES_TO_REMOVE \n{s_remove}\n   )\n')
+
+
+class SGraph:
+
+    def __init__(self, seed, item_cache, config=None):
+        self._graph = nx.DiGraph()
+        self.populate(seed, item_cache, config)
+
+    def populate(self, seed, item_cache, config):
+        queue = deque()
+
+        # Insert the seed objects
+        for name in as_tuple(seed):
+            if '#' not in name:
+                name = f'#{name}'
+            item = item_cache.get(name)
+
+            if not item:
+                # We may have to create the corresponding module's definitions first
+                module_item = item_cache.get(name[:name.index('#')])
+                if module_item:
+                    module_item.create_definition_items(item_cache=item_cache, config=config)
+                    item = item_cache.get(name)
+
+            if item:
+                self.add_node(item)
+                queue.append(item)
+            else:
+                debug('No item found for seed "%s"', name)
+
+        # Populate the graph
+        while queue:
+            item = queue.popleft()
+
+            if item.expand:
+                dependencies = []
+                items_to_ignore = [*item.block, *item.ignore]
+                for dependency in item.create_dependency_items(item_cache=item_cache, config=config):
+                    if not SchedulerConfig.match_item_keys(dependency.name, items_to_ignore):
+                        dependencies += [dependency]
+                new_items = [item_ for item_ in dependencies if item_ not in self._graph]
+                if new_items:
+                    self.add_nodes(new_items)
+                    queue.extend(new_items)
+                self.add_edges((item, item_) for item_ in dependencies)
+
+    @property
+    def items(self):
+        return tuple(self._graph.nodes)
+
+    @property
+    def dependencies(self):
+        return tuple(self._graph.edges)
+
+    def add_node(self, item):
+        self._graph.add_node(item)
+
+    def add_nodes(self, items):
+        self._graph.add_nodes_from(items)
+
+    def add_edge(self, edge):
+        self._graph.add_edge(edge[0], edge[1])
+
+    def add_edges(self, edges):
+        self._graph.add_edges_from(edges)
+
+    def export_to_file(self, dotfile_path):
+        """
+        Generate a dotfile from the current graph
+
+        Parameters
+        ----------
+        dotfile_path : str or pathlib.Path
+            Path to write the dotfile to. A corresponding graphical representation
+            will be created with an additional ``.pdf`` appendix.
+        """
+        try:
+            import graphviz as gviz  # pylint: disable=import-outside-toplevel
+        except ImportError:
+            warning('[Loki] Failed to load graphviz, skipping file export generation...')
+            return
+
+        path = Path(dotfile_path)
+        graph = gviz.Digraph(format='pdf', strict=True, graph_attr=(('rankdir', 'LR'),))
+
+        # Insert all nodes in the graph
+        style = {
+            'color': 'black', 'shape': 'box', 'fillcolor': 'limegreen', 'style': 'filled'
+        }
+        for item in self.items:
+            graph.node(item.name.upper(), **style)
+
+        # Insert all edges in the schedulers graph
+        graph.edges((a.name.upper(), b.name.upper()) for a, b in self.dependencies)
+
+        try:
+            graph.render(path, view=False)
+        except gviz.ExecutableNotFound as e:
+            warning(f'[Loki] Failed to render callgraph due to graphviz error:\n  {e}')
