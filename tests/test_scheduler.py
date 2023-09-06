@@ -1416,6 +1416,8 @@ def test_scheduler_traversal_order(here, config, frontend, use_file_graph, rever
 
     class LoggingTransformation(Transformation):
 
+        reverse_traversal = reverse
+
         def __init__(self):
             self.record = []
 
@@ -1424,7 +1426,7 @@ def test_scheduler_traversal_order(here, config, frontend, use_file_graph, rever
             self.record += [item.name]
 
     transformation = LoggingTransformation()
-    scheduler.process(transformation=transformation, reverse=reverse, use_file_graph=use_file_graph)
+    scheduler.process(transformation=transformation, use_file_graph=use_file_graph)
 
     if reverse:
         assert transformation.record == expected[::-1]

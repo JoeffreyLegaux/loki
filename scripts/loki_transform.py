@@ -264,7 +264,7 @@ def convert(
 
     if global_var_offload:
         scheduler.process(transformation=GlobalVarOffloadTransformation(),
-                          item_filter=(SubroutineItem, GlobalVarImportItem), reverse=True)
+                          item_filter=(SubroutineItem, GlobalVarImportItem))
 
     if mode in ['idem-stack', 'scc-stack']:
         if frontend == Frontend.OMNI:
@@ -280,10 +280,9 @@ def convert(
         vertical = scheduler.config.dimensions['vertical']
         block_dim = scheduler.config.dimensions['block_dim']
         directive = {'idem-stack': 'openmp', 'scc-stack': 'openacc'}[mode]
-        transformation = TemporariesPoolAllocatorTransformation(
+        scheduler.process(transformation=TemporariesPoolAllocatorTransformation(
             block_dim=block_dim, directive=directive, check_bounds='scc' not in mode
-        )
-        scheduler.process(transformation=transformation, reverse=True)
+        ))
     if mode == 'cuf-parametrise':
         dic2p = scheduler.config.dic2p
         disable = scheduler.config.disable
@@ -476,7 +475,7 @@ def ecphys(mode, config, header, source, build, cpp, directive, frontend):
     # Backward insert argument shapes (for surface routines)
     scheduler.process(transformation=ArgumentArrayShapeAnalysis())
 
-    scheduler.process(transformation=ExplicitArgumentArrayShapeTransformation(), reverse=True)
+    scheduler.process(transformation=ExplicitArgumentArrayShapeTransformation())
 
     # Remove DR_HOOK and other utility calls first, so they don't interfere with SCC loop hoisting
     if 'scc' in mode:
