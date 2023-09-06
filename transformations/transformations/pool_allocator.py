@@ -643,9 +643,12 @@ class TemporariesPoolAllocatorTransformation(Transformation):
                 # Check if block variable is assigned in loop body
                 for assignment in assignments:
                     if assignment.lhs == self.block_dim.index:
-                        assert assignment in loop.body
-                        # Need to insert the pointer assignment after block dimension is set
-                        assign_pos = loop.body.index(assignment)
+                        # assert assignment in loop.body
+                        if assignment in loop.body:
+                            # Need to insert the pointer assignment after block dimension is set
+                            assign_pos = loop.body.index(assignment)
+                        else:
+                            assign_pos = -1
                         break
                 else:
                     continue

@@ -499,9 +499,15 @@ class SCCAnnotateTransformation(Transformation):
         mapper = {}
         driver_loops = []
         with pragmas_attached(routine, ir.Loop, attach_pragma_post=True):
-            for call in FindNodes(ir.CallStatement).visit(routine.body):
-                if not call.name in targets:
-                    continue
+            for call in FindNodes((ir.CallStatement, ir.Pragma)).visit(routine.body):
+                if isinstance(call, ir.CallStatement):
+                    if not call.name in targets:
+                        continue
+                else:
+                    if "loki" in call.keyword.lower() and "driver-loop" in call.content.lower():
+                        pass
+                    else:
+                        continue
 
                 # Find the driver loop by checking the call's heritage
                 ancestors = flatten(FindScopes(call).visit(routine.body))

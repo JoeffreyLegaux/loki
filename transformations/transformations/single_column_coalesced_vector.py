@@ -75,6 +75,13 @@ class SCCDevectorTransformation(Transformation):
         # Identify outer "scopes" (loops/conditionals) constrained by recursive routine calls
         separator_nodes = []
         calls = FindNodes(ir.CallStatement).visit(section)
+        _pragmas = FindNodes(ir.Pragma).visit(section)
+        pragmas = []
+        for _pragma in _pragmas:
+            if _pragma.keyword.lower() == "loki" and _pragma.content.lower() == "seperator":
+                pragmas.append(_pragma)
+        for pragma in pragmas:
+            separator_nodes.append(pragma)
         for call in calls:
 
             # check if calls have been enriched
