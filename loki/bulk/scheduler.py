@@ -19,6 +19,7 @@ from loki.logging import info, perf, warning, debug
 from loki.bulk.item import ProcedureBindingItem, SubroutineItem, GlobalVarImportItem, GenericImportItem
 from loki.subroutine import Subroutine
 from loki.module import Module
+from loki.transform import TransformationChain
 
 
 __all__ = ['Scheduler', 'SchedulerConfig']
@@ -599,7 +600,43 @@ class Scheduler:
                 successors += [self.item_map[child.name]] + self.item_successors(child)
         return successors
 
-    def process(self, transformation, reverse=False, item_filter=SubroutineItem, use_file_graph=False):
+    def _traverse_item_graph(self, transformation, TrafoType=None, item_filter=SubroutineItem,
+                             use_file_graph=False):
+
+        trafo_name = TrafoType.__name__ if TrafoType else transformation.__class__.__name__
+        log = f'[Loki::Scheduler] Applied transformation <{trafo_name}>' + ' in {:.2f}s'
+        with Timer(logger=info, text=log):
+
+            if use_file_graph:
+                graph = self.file_graph
+            else:
+                graph = self.item_graph
+
+            reverse = TrafoType.reverse_traversal if TrafoType else transformation.reverse_traversal
+            traversal = nx.topological_sort(graph)
+            if reverse:
+                traversal = reversed(list(traversal))
+
+            if use_file_graph:
+                for node in traversal:
+                    items = graph.nodes[node]['items']
+                    transformation.apply(items[0].source, TrafoType=TrafoType, item=items[0], items=items)
+            else:
+                for item in traversal:
+                    if item_filter and not isinstance(item, item_filter):
+                        continue
+
+                    # Use entry from item_map to ensure the original item is used in transformation
+                    _item = self.item_map[item.name]
+
+                    # Process work item with appropriate kernel
+                    transformation.apply(
+                        _item.source, TrafoType=TrafoType, role=_item.role, mode=_item.mode,
+                        item=_item, targets=_item.targets,
+                        successors=self.item_successors(_item), depths=self.depths
+                    )
+
+    def process(self, transformation, item_filter=SubroutineItem, use_file_graph=False):
         """
         Process all :attr:`items` in the scheduler's graph
 
@@ -613,37 +650,20 @@ class Scheduler:
         the transformation on the first `item` associated with a file only.
         In this mode, :data:`item_filter` does not have any effect.
         """
-        trafo_name = transformation.__class__.__name__
-        log = f'[Loki::Scheduler] Applied transformation <{trafo_name}>' + ' in {:.2f}s'
-        with Timer(logger=info, text=log):
 
-            if use_file_graph:
-                graph = self.file_graph
-            else:
-                graph = self.item_graph
+        if isinstance(transformation, TransformationChain):
+            for TrafoType in transformation.get_transformation_subclasses():
+                self._traverse_item_graph(
+                    transformation, TrafoType=TrafoType, item_filter=item_filter,
+                    use_file_graph=use_file_graph
+                )
 
-            traversal = nx.topological_sort(graph)
-            if reverse:
-                traversal = reversed(list(traversal))
+        else:
+            self._traverse_item_graph(
+                transformation, TrafoType=None, item_filter=item_filter,
+                use_file_graph=use_file_graph
+            )
 
-            if use_file_graph:
-                for node in traversal:
-                    items = graph.nodes[node]['items']
-                    transformation.apply(items[0].source, item=items[0], items=items)
-            else:
-                for item in traversal:
-                    if item_filter and not isinstance(item, item_filter):
-                        continue
-
-                    # Use entry from item_map to ensure the original item is used in transformation
-                    _item = self.item_map[item.name]
-
-                    # Process work item with appropriate kernel
-                    transformation.apply(
-                        _item.source, role=_item.role, mode=_item.mode,
-                        item=_item, targets=_item.targets,
-                        successors=self.item_successors(_item), depths=self.depths
-                    )
 
     def callgraph(self, path, with_file_graph=False):
         """
