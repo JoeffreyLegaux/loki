@@ -104,10 +104,12 @@ def cli(debug):
               help="Generate offload instructions for global vars imported via 'USE' statements.")
 @click.option('--remove-derived-args/--no-remove-derived-args', default=False,
               help="Remove derived-type arguments and replace with canonical arguments")
+@click.option('--argument-array-shape/--no-argument-array-shape', default=True,
+              help="Recursively derive explicit shape dimension for argument arrays")
 def convert(
         mode, config, build, source, header, cpp, directive, include, define, omni_include, xmod,
         data_offload, remove_openmp, frontend, trim_vector_sections,
-        global_var_offload, remove_derived_args
+        global_var_offload, remove_derived_args, argument_array_shape
 ):
     """
     Batch-processing mode for Fortran-to-Fortran transformations that
@@ -165,6 +167,11 @@ def convert(
         ))
     else:
         scheduler.process(transformation=DrHookTransformation(mode=mode, remove=False))
+
+    # Backward insert argument shapes (for surface routines)
+    if argument_array_shape:
+        scheduler.process(transformation=ArgumentArrayShapeAnalysis())
+        scheduler.process(transformation=ExplicitArgumentArrayShapeTransformation(), reverse=True)
 
     # Insert data offload regions for GPUs and remove OpenMP threading directives
     use_claw_offload = True
