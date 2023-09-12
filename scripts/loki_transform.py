@@ -104,7 +104,7 @@ def cli(debug):
               help="Generate offload instructions for global vars imported via 'USE' statements.")
 @click.option('--remove-derived-args/--no-remove-derived-args', default=False,
               help="Remove derived-type arguments and replace with canonical arguments")
-@click.option('--argument-array-shape/--no-argument-array-shape', default=True,
+@click.option('--argument-array-shape/--no-argument-array-shape', default=False,
               help="Recursively derive explicit shape dimension for argument arrays")
 def convert(
         mode, config, build, source, header, cpp, directive, include, define, omni_include, xmod,
