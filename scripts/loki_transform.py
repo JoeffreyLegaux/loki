@@ -96,7 +96,7 @@ def cli(debug):
               help='Run transformation to insert custom data offload regions.')
 @click.option('--remove-openmp', is_flag=True, default=False,
               help='Removes existing OpenMP pragmas in "!$loki data" regions.')
-@click.option('--deviceptr', is_flag=True, default=False,
+@click.option('--assume_deviceptr', is_flag=True, default=False,
               help='Mark the relevant arguments as true device-pointers in "!$loki data" regions.')
 @click.option('--frontend', default='fp', type=click.Choice(['fp', 'ofp', 'omni']),
               help='Frontend parser to use (default FP)')
